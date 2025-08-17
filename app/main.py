@@ -45,6 +45,8 @@ app = FastAPI(
 
 # Set all CORS enabled origins
 cors_origins = settings.get_cors_origins()
+# DEBUG: remove after fix
+print(f"DEBUG: CORS origins = {cors_origins}")
 if cors_origins:
     app.add_middleware(
         CORSMiddleware,
@@ -53,6 +55,7 @@ if cors_origins:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    print(f"DEBUG: CORS middleware configured with origins: {[str(origin) for origin in cors_origins]}")
 
 app.include_router(api_router, prefix="/api/v1")
 
