@@ -22,8 +22,6 @@ def login_access_token(
     """
     OAuth2 compatible token login, get an access token for future requests
     """
-    # DEBUG: remove after fix
-    print(f"DEBUG: Login attempt for username: {form_data.username}")
     user = user_service.authenticate(
         db, email=form_data.username, password=form_data.password
     )
