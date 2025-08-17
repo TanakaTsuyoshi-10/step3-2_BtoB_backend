@@ -1,0 +1,79 @@
+name: Deploy FastAPI to Azure App Service
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run tests (optional)
+      run: |
+        # Uncomment and modify based on your test setup
+        # python -m pytest tests/
+
+    - name: Create deployment package
+      run: |
+        # Make startup.sh executable
+        chmod +x startup.sh
+        
+        # Create a zip file with all necessary files
+        # Exclude test files and development scripts
+        zip -r deployment.zip . \
+          -x "tests/*" \
+          -x "debug_*.py" \
+          -x "test_*.py" \
+          -x "verify_*.py" \
+          -x "final_verification.py" \
+          -x ".git/*" \
+          -x "__pycache__/*" \
+          -x "*/__pycache__/*" \
+          -x "*.pyc" \
+          -x ".env" \
+          -x ".pytest_cache/*" \
+          -x "*.log"
+
+    - name: Deploy to Azure App Service
+      uses: azure/webapps-deploy@v2
+      with:
+        app-name: ${{ secrets.AZURE_APP_SERVICE_NAME }}
+        publish-profile: ${{ secrets.AZURE_APP_SERVICE_PUBLISH_PROFILE }}
+        package: deployment.zip
+
+    - name: Health Check
+      run: |
+        # Wait for deployment to complete
+        sleep 60
+        
+        # Check health endpoint
+        APP_URL="https://${{ secrets.AZURE_APP_SERVICE_NAME }}.azurewebsites.net"
+        
+        echo "Checking health endpoint: $APP_URL/health"
+        RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "$APP_URL/health" || echo "000")
+        
+        if [ "$RESPONSE" = "200" ]; then
+          echo "✅ Health check passed! App is running successfully."
+          echo "🌐 App URL: $APP_URL"
+          echo "📖 API Docs: $APP_URL/docs"
+        else
+          echo "❌ Health check failed. HTTP status: $RESPONSE"
+          echo "Please check the Azure App Service logs for details."
+          exit 1
+        fi
