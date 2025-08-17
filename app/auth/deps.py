@@ -21,11 +21,23 @@ def get_current_user(
         payload = jwt.decode(
             token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
         )
-        token_data = TokenData(email=payload.get("sub"))
+        email = payload.get("sub")
+        if email is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Token payload is invalid",
+            )
+        token_data = TokenData(email=email)
     except (jwt.JWTError, ValidationError):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Could not validate credentials",
+        )
+    
+    if not token_data.email:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Token email is missing",
         )
     
     user = db.query(User).filter(User.email == token_data.email).first()
