@@ -51,7 +51,7 @@ if cors_origins:
         allow_origins=[str(origin) for origin in cors_origins],
         allow_credentials=True,
         allow_methods=["*"],
-        allow_headers=["*"],
+        allow_headers=["Authorization", "Content-Type"],
     )
 
 app.include_router(api_router, prefix="/api/v1")
