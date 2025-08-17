@@ -18,6 +18,7 @@ class UserService:
             hashed_password=get_password_hash(obj_in.password),
             full_name=obj_in.full_name,
             is_active=obj_in.is_active,
+            is_superuser=getattr(obj_in, "is_superuser", False),
         )
         db.add(db_obj)
         db.commit()

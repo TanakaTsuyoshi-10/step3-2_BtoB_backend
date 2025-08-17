@@ -1,0 +1,185 @@
+name: Deploy FastAPI to Azure App Service
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+# GitHub Variables (リポジトリ設定 > Variables)
+env:
+  AZURE_WEBAPP_NAME: ${{ vars.AZURE_WEBAPP_NAME || 'app-002-gen10-step3-2-py-oshima2' }}
+  PYTHON_VERSION: ${{ vars.PYTHON_VERSION || '3.12' }}
+  WORKING_DIRECTORY: ${{ vars.WORKING_DIRECTORY || '.' }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    # FastAPI + MySQL + SSL証明書の構成に最適化
+    steps:
+    - name: 🛎️ Checkout repository
+      uses: actions/checkout@v4
+
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: ⚡ Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: 📦 Install dependencies
+      working-directory: ${{ env.WORKING_DIRECTORY }}
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: 🧪 Run pre-deployment tests
+      working-directory: ${{ env.WORKING_DIRECTORY }}
+      run: |
+        # Import test - すべての主要モジュールがインポート可能か確認
+        python -c "
+        try:
+            import fastapi, sqlalchemy, pymysql, uvicorn, gunicorn
+            from app.main import app
+            from app.core.config import settings
+            print('✅ All critical imports successful')
+        except ImportError as e:
+            print(f'❌ Import error: {e}')
+            exit(1)
+        "
+        
+        # Optional: Lint check (if you have flake8/black in requirements.txt)
+        # pip install flake8 && flake8 app/ --max-line-length=88 --ignore=E203,W503
+        
+        # Optional: Type check (if you have mypy in requirements.txt)
+        # pip install mypy && mypy app/ --ignore-missing-imports
+
+    - name: 🏗️ Create deployment package
+      working-directory: ${{ env.WORKING_DIRECTORY }}
+      run: |
+        # Make startup script executable
+        chmod +x startup.sh
+        
+        # Verify SSL certificate exists
+        if [ ! -f "app/certs/DigiCertGlobalRootG2.crt" ]; then
+          echo "❌ SSL certificate not found!"
+          exit 1
+        fi
+        echo "✅ SSL certificate verified"
+        
+        # Create deployment archive excluding development files
+        zip -r ../deployment.zip . \
+          -x "tests/*" \
+          -x "debug_*.py" \
+          -x "test_*.py" \
+          -x "verify_*.py" \
+          -x "final_verification.py" \
+          -x ".git/*" \
+          -x "__pycache__/*" \
+          -x "*/__pycache__/*" \
+          -x "*.pyc" \
+          -x ".env*" \
+          -x ".pytest_cache/*" \
+          -x "*.log" \
+          -x "azure-deploy-optimized.yml"
+
+    - name: 🚀 Deploy to Azure App Service
+      uses: azure/webapps-deploy@v2
+      with:
+        app-name: ${{ env.AZURE_WEBAPP_NAME }}
+        publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+        package: deployment.zip
+
+    # Alembic Migration Options (choose one):
+    
+    # Option A: SSH後に手動実行 (推奨 - 制御しやすい)
+    - name: 📋 Migration Instructions
+      run: |
+        echo "🔄 Database Migration Required:"
+        echo "1. Azure Portal > App Service > SSH"
+        echo "2. Run: alembic upgrade head"
+        echo "3. Verify: python -c 'from app.db.database import engine; print(\"Connected:\", engine.connect())'"
+    
+    # Option B: 自動マイグレーション (startup.shで実行済みの場合)
+    # - name: 🔄 Database Migration Status
+    #   run: |
+    #     echo "✅ Migrations handled by startup.sh"
+    #     echo "Check logs: az webapp log tail --name ${{ env.AZURE_WEBAPP_NAME }} --resource-group YOUR_RG"
+
+    - name: 🏥 Health Check & Verification
+      run: |
+        # Wait for deployment to stabilize
+        echo "⏳ Waiting for deployment to complete..."
+        sleep 90
+        
+        APP_URL="https://${{ env.AZURE_WEBAPP_NAME }}.azurewebsites.net"
+        
+        # Health endpoint check
+        echo "🔍 Checking health endpoint..."
+        HEALTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$APP_URL/health" || echo "000")
+        
+        if [ "$HEALTH_STATUS" = "200" ]; then
+          echo "✅ Health check passed!"
+        else
+          echo "⚠️ Health check returned: $HEALTH_STATUS"
+        fi
+        
+        # Swagger UI check
+        echo "🔍 Checking Swagger UI..."
+        DOCS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$APP_URL/docs" || echo "000")
+        
+        if [ "$DOCS_STATUS" = "200" ]; then
+          echo "✅ Swagger UI accessible!"
+        else
+          echo "⚠️ Swagger UI returned: $DOCS_STATUS"
+        fi
+        
+        # Summary
+        echo ""
+        echo "🌐 Application URLs:"
+        echo "   App: $APP_URL"
+        echo "   Health: $APP_URL/health"
+        echo "   Docs: $APP_URL/docs"
+        echo ""
+        echo "🔧 Troubleshooting:"
+        echo "   Logs: Azure Portal > App Service > Log stream"
+        echo "   SSH: Azure Portal > App Service > SSH"
+        echo "   Config: Azure Portal > App Service > Configuration"
+
+# 📝 IMPORTANT NOTES:
+# 
+# 1. Environment Variables:
+#    - Database settings are configured in Azure App Service > Configuration
+#    - Do NOT use .env files in production
+#    - Required Azure App Settings:
+#      * MYSQL_HOST=rdbs-002-gen10-step3-2-oshima2.mysql.database.azure.com
+#      * MYSQL_USER=tech0gen10student
+#      * MYSQL_PASSWORD=****** (from Azure Key Vault or direct input)
+#      * MYSQL_DATABASE=test_tanaka
+#      * MYSQL_SSL_CA=app/certs/DigiCertGlobalRootG2.crt
+#      * SECRET_KEY=****** (JWT secret)
+#      * BACKEND_CORS_ORIGINS=["http://localhost:3000"]
+#
+# 2. Required GitHub Secrets:
+#    - AZURE_WEBAPP_PUBLISH_PROFILE (download from Azure Portal)
+#
+# 3. Optional GitHub Variables:
+#    - AZURE_WEBAPP_NAME (default: app-002-gen10-step3-2-py-oshima2)
+#    - PYTHON_VERSION (default: 3.12)
+#    - WORKING_DIRECTORY (default: .)
+#
+# 4. Azure App Service Configuration:
+#    - Startup Command: bash startup.sh
+#    - Runtime Stack: Python 3.12
+#    - Port: 8000 (handled by gunicorn in startup.sh)
+#
+# 5. Database Firewall:
+#    - Add App Service outbound IPs to MySQL firewall
+#    - Enable "Allow Azure services and resources" if needed

@@ -1,0 +1,195 @@
+name: Deploy FastAPI to Azure App Service (Fixed)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  AZURE_WEBAPP_NAME: 'app-002-gen10-step3-2-py-oshima2'
+  PYTHON_VERSION: '3.12'
+  WORKING_DIRECTORY: '.'  # ルートディレクトリ（step3_2_BtoB_backend問題を回避）
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 🛎️ Checkout repository
+      uses: actions/checkout@v4
+
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: ⚡ Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+
+    - name: 📦 Install dependencies
+      working-directory: ${{ env.WORKING_DIRECTORY }}
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: 🧪 Pre-deployment validation
+      working-directory: ${{ env.WORKING_DIRECTORY }}
+      run: |
+        echo "🔍 Validating deployment package..."
+        
+        # 1. Critical imports test
+        python -c "
+        try:
+            import fastapi, sqlalchemy, pymysql, uvicorn, gunicorn
+            from app.main import app
+            from app.core.config import settings
+            print('✅ All imports successful')
+        except ImportError as e:
+            print(f'❌ Import error: {e}')
+            exit(1)
+        "
+        
+        # 2. File structure validation
+        echo "📁 Checking file structure..."
+        ls -la
+        
+        if [ ! -f "app/main.py" ]; then
+          echo "❌ app/main.py not found!"
+          exit 1
+        fi
+        
+        if [ ! -f "requirements.txt" ]; then
+          echo "❌ requirements.txt not found!"
+          exit 1
+        fi
+        
+        if [ ! -f "startup.sh" ]; then
+          echo "⚠️ startup.sh not found - using direct gunicorn mode"
+        else
+          echo "✅ startup.sh found"
+          ls -la startup.sh
+        fi
+        
+        # 3. SSL certificate validation
+        if [ ! -f "app/certs/DigiCertGlobalRootG2.crt" ]; then
+          echo "❌ SSL certificate not found!"
+          exit 1
+        fi
+        echo "✅ SSL certificate verified"
+
+    - name: 🏗️ Prepare deployment package
+      working-directory: ${{ env.WORKING_DIRECTORY }}
+      run: |
+        # Make startup.sh executable if exists
+        if [ -f "startup.sh" ]; then
+          chmod +x startup.sh
+          echo "✅ startup.sh made executable"
+        fi
+        
+        # Verify app structure
+        echo "📋 Final structure check:"
+        find . -name "*.py" -path "./app/*" | head -10
+        
+        # Create deployment zip
+        zip -r deployment.zip . \
+          -x "tests/*" \
+          -x "debug_*.py" \
+          -x "test_*.py" \
+          -x "verify_*.py" \
+          -x "final_verification.py" \
+          -x "azure-deploy-*.yml" \
+          -x ".git/*" \
+          -x "__pycache__/*" \
+          -x "*/__pycache__/*" \
+          -x "*.pyc" \
+          -x ".env*" \
+          -x ".pytest_cache/*" \
+          -x "*.log"
+
+    - name: 🚀 Deploy to Azure App Service
+      uses: azure/webapps-deploy@v2
+      with:
+        app-name: ${{ env.AZURE_WEBAPP_NAME }}
+        publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+        package: deployment.zip
+
+    - name: 🔧 Post-deployment verification (SSH)
+      run: |
+        echo "📋 Post-deployment checks to run in Azure SSH:"
+        echo ""
+        echo "# 1. File placement verification"
+        echo "pwd && ls -la /home/site/wwwroot"
+        echo ""
+        echo "# 2. startup.sh verification (if using B案)"
+        echo "test -f /home/site/wwwroot/startup.sh && echo 'startup.sh found' || echo 'startup.sh missing'"
+        echo "test -x /home/site/wwwroot/startup.sh && echo 'startup.sh executable' || echo 'startup.sh not executable'"
+        echo ""
+        echo "# 3. App structure verification"
+        echo "ls -la /home/site/wwwroot/app/"
+        echo ""
+        echo "# 4. Dependencies verification"
+        echo "python -c 'import fastapi, uvicorn, gunicorn; print(\"Dependencies OK\")'"
+        echo ""
+        echo "# 5. Manual startup test (if needed)"
+        echo "cd /home/site/wwwroot && python -m gunicorn --bind=0.0.0.0:8000 --workers=1 app.main:app"
+
+    - name: 🏥 Health check
+      run: |
+        echo "⏳ Waiting for deployment to stabilize..."
+        sleep 120
+        
+        APP_URL="https://${{ env.AZURE_WEBAPP_NAME }}.azurewebsites.net"
+        
+        echo "🔍 Health check: $APP_URL/health"
+        HEALTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$APP_URL/health" || echo "000")
+        
+        if [ "$HEALTH_STATUS" = "200" ]; then
+          echo "✅ Health check PASSED!"
+          echo "🌐 App URL: $APP_URL"
+          echo "📖 API Docs: $APP_URL/docs"
+        else
+          echo "❌ Health check FAILED (Status: $HEALTH_STATUS)"
+          echo ""
+          echo "🔧 Troubleshooting steps:"
+          echo "1. Check logs: Azure Portal > App Service > Log stream"
+          echo "2. SSH access: Azure Portal > App Service > SSH"
+          echo "3. Run diagnostics in SSH:"
+          echo "   pwd && ls -la"
+          echo "   python -c 'from app.main import app; print(\"App import OK\")'"
+          echo "   curl -s http://127.0.0.1:8000/health"
+          exit 1
+        fi
+
+# 🚨 CRITICAL DEPLOYMENT SETTINGS:
+#
+# Azure Portal Configuration Required:
+#
+# 1. App Service > Configuration > General Settings:
+#    - Stack: Python
+#    - Major Version: Python 3
+#    - Minor Version: Python 3.12
+#    
+# 2. Startup Command (choose one):
+#    A案 (推奨): gunicorn --bind=0.0.0.0:8000 --workers=4 --worker-class=uvicorn.workers.UvicornWorker --timeout=120 app.main:app
+#    B案: /home/site/wwwroot/startup.sh
+#
+# 3. Application Settings:
+#    MYSQL_HOST=rdbs-002-gen10-step3-2-oshima2.mysql.database.azure.com
+#    MYSQL_PORT=3306
+#    MYSQL_USER=tech0gen10student
+#    MYSQL_PASSWORD=****** (secure value)
+#    MYSQL_DATABASE=test_tanaka
+#    MYSQL_SSL_CA=app/certs/DigiCertGlobalRootG2.crt
+#    SECRET_KEY=****** (JWT secret)
+#    BACKEND_CORS_ORIGINS=["http://localhost:3000"]
+#    SCM_DO_BUILD_DURING_DEPLOYMENT=true
+#
+# 4. GitHub Secrets Required:
+#    AZURE_WEBAPP_PUBLISH_PROFILE (download from Azure Portal)
+#
+# 5. MySQL Firewall:
+#    Add App Service outbound IPs to MySQL firewall rules
