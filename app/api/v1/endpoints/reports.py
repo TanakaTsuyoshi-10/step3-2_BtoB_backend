@@ -1,243 +1,133 @@
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from typing import List, Optional, Annotated
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
-from datetime import date
+from sqlalchemy import desc, func
+from datetime import date, datetime
 import io
 import csv
+import json
 from decimal import Decimal
 
 from app.db.database import get_db
-from app.auth.deps import get_current_active_user
+from app.auth.deps import get_current_user
 from app.models.user import User
-from app.services.report import get_report_service, ReportService
-from app.schemas.report import (
-    Report, 
-    ReportCreate, 
-    ReportUpdate, 
-    ReportSummary,
-    ReportExportRequest
-)
+from app.models.reduction_record import ReductionRecord
+from app.models.employee import Employee
 
 router = APIRouter()
 
 
-@router.post("/", response_model=Report)
-def create_report(
-    report_data: ReportCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-    report_service: ReportService = Depends(get_report_service)
-):
-    """レポート作成"""
-    return report_service.create_report(report_data, current_user.email)
+# 既存のレポート機能は一旦削除（存在しない依存関係のため）
+# 新しいCSRレポート機能のみ提供
 
 
-@router.get("/", response_model=List[ReportSummary])
-def get_reports(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
-    search: Optional[str] = Query(None),
-    period_start: Optional[date] = Query(None),
-    period_end: Optional[date] = Query(None),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-    report_service: ReportService = Depends(get_report_service)
+# 新しいBtoBtoC CSRレポート機能
+def get_current_admin_user(current_user: Annotated[User, Depends(get_current_user)]) -> User:
+    """管理者権限チェック"""
+    if not current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="管理者権限が必要です"
+        )
+    return current_user
+
+
+@router.post("/csr-export")
+def export_csr_report(
+    admin_user: Annotated[User, Depends(get_current_admin_user)],
+    db: Annotated[Session, Depends(get_db)],
+    range_start: str,  # YYYY-MM-DD
+    range_end: str,    # YYYY-MM-DD
+    granularity: str,  # monthly, quarterly, yearly
+    department: str = None,
+    format: str = "csv"  # csv or json
 ):
-    """レポート一覧取得"""
-    reports = report_service.get_reports(
-        skip=skip, 
-        limit=limit, 
-        search=search,
-        period_start=period_start,
-        period_end=period_end
+    """CSRレポートをエクスポート"""
+    
+    try:
+        start_date = datetime.strptime(range_start, "%Y-%m-%d").date()
+        end_date = datetime.strptime(range_end, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="日付はYYYY-MM-DD形式で指定してください"
+        )
+    
+    # データ集計
+    query = db.query(
+        User.id.label('user_id'),
+        User.full_name.label('user_name'),
+        Employee.department,
+        func.sum(ReductionRecord.reduced_co2_kg).label('total_co2_reduction')
+    ).join(
+        ReductionRecord, User.id == ReductionRecord.user_id
+    ).outerjoin(
+        Employee, User.id == Employee.user_id
+    ).filter(
+        ReductionRecord.date >= start_date,
+        ReductionRecord.date <= end_date
     )
-    return [ReportSummary.from_orm(report) for report in reports]
-
-
-@router.get("/{report_id}", response_model=Report)
-def get_report(
-    report_id: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-    report_service: ReportService = Depends(get_report_service)
-):
-    """レポート詳細取得"""
-    report = report_service.get_report_by_id(report_id)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
-    return report
-
-
-@router.put("/{report_id}", response_model=Report)
-def update_report(
-    report_id: str,
-    report_data: ReportUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-    report_service: ReportService = Depends(get_report_service)
-):
-    """レポート更新"""
-    report = report_service.update_report(report_id, report_data)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
-    return report
-
-
-@router.post("/{report_id}/publish", response_model=Report)
-def publish_report(
-    report_id: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-    report_service: ReportService = Depends(get_report_service)
-):
-    """レポート確定発行"""
-    report = report_service.publish_report(report_id)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
-    return report
-
-
-@router.get("/{report_id}/export")
-def export_report(
-    report_id: str,
-    format: str = Query(..., regex="^(csv|pdf)$"),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-    report_service: ReportService = Depends(get_report_service)
-):
-    """レポートエクスポート（CSV/PDF）"""
-    report = report_service.get_report_by_id(report_id)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
     
-    if format == "csv":
-        return _export_csv(report)
-    elif format == "pdf":
-        return _export_pdf(report)
-    else:
-        raise HTTPException(status_code=400, detail="Invalid format")
-
-
-def _export_csv(report) -> Response:
-    """CSV エクスポート"""
-    output = io.StringIO()
-    writer = csv.writer(output)
+    if department:
+        query = query.filter(Employee.department == department)
     
-    # ヘッダー情報
-    writer.writerow(["レポート名", report.name])
-    writer.writerow(["対象期間", f"{report.period_start} - {report.period_end}"])
-    writer.writerow(["方法論", report.methodology])
-    writer.writerow(["作成者", report.created_by])
-    writer.writerow(["ステータス", report.status])
-    writer.writerow(["合計削減量(t-CO₂)", f"{report.total_reduction_tonnes}"])
-    writer.writerow([])  # 空行
+    results = query.group_by(
+        User.id, User.full_name, Employee.department
+    ).order_by(desc('total_co2_reduction')).all()
     
-    # Scope別合計
-    writer.writerow(["Scope", "削減量(kg)", "削減量(t-CO₂)"])
-    writer.writerow(["Scope1", float(report.scope1_reduction_kg), round(float(report.scope1_reduction_kg)/1000, 1)])
-    writer.writerow(["Scope2", float(report.scope2_reduction_kg), round(float(report.scope2_reduction_kg)/1000, 1)])
-    writer.writerow(["Scope3", float(report.scope3_reduction_kg), round(float(report.scope3_reduction_kg)/1000, 1)])
-    writer.writerow([])  # 空行
+    # レポートデータ構築
+    total_co2 = sum(r.total_co2_reduction or 0 for r in results)
     
-    # 明細
-    writer.writerow(["サイト名", "設備名", "Scope", "削減量(kg)", "削減量(t-CO₂)"])
-    for item in report.items:
-        writer.writerow([
-            item.site_name,
-            item.device_name,
-            item.scope,
-            float(item.amount_kg),
-            round(float(item.amount_kg)/1000, 1)
-        ])
+    if format == "json":
+        report_data = {
+            "企業名": "貴社",
+            "期間": f"{range_start} ～ {range_end}",
+            "総CO2削減量": round(total_co2, 2),
+            "参加者数": len(results),
+            "ランキング": [
+                {
+                    "氏名": r.user_name or f"ユーザー{r.user_id}",
+                    "部門": r.department or "未設定",
+                    "CO2削減量": round(r.total_co2_reduction or 0, 2)
+                }
+                for r in results[:10]
+            ]
+        }
+        return Response(
+            content=json.dumps(report_data, ensure_ascii=False, indent=2),
+            media_type="application/json",
+            headers={"Content-Disposition": f"attachment; filename=csr_report_{range_start}_{range_end}.json"}
+        )
     
-    if report.notes:
-        writer.writerow([])  # 空行
-        writer.writerow(["備考", report.notes])
-    
-    content = output.getvalue()
-    output.close()
-    
-    filename = f"report_{report.name}_{report.period_start}_{report.period_end}.csv"
-    
-    return Response(
-        content=content.encode('utf-8'),
-        media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
-    )
-
-
-def _export_pdf(report) -> Response:
-    """PDF エクスポート（簡易HTML版）"""
-    # PDFライブラリが複雑なので、まずはHTMLを返す
-    # 実際のPDF生成は後で追加可能
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <title>CO₂削減量レポート - {report.name}</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 20px; }}
-            .header {{ border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px; }}
-            .summary {{ display: flex; gap: 20px; margin: 20px 0; }}
-            .card {{ border: 1px solid #ddd; padding: 15px; border-radius: 5px; flex: 1; }}
-            table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
-            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-            th {{ background-color: #f2f2f2; }}
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <h1>CO₂削減量レポート</h1>
-            <h2>{report.name}</h2>
-            <p>対象期間: {report.period_start} - {report.period_end}</p>
-            <p>作成者: {report.created_by} | ステータス: {report.status}</p>
-        </div>
+    else:  # CSV
+        output = io.StringIO()
+        writer = csv.writer(output)
         
-        <div class="summary">
-            <div class="card">
-                <h3>Scope1</h3>
-                <p>{round(float(report.scope1_reduction_kg)/1000, 1)} t-CO₂</p>
-            </div>
-            <div class="card">
-                <h3>Scope2</h3>
-                <p>{round(float(report.scope2_reduction_kg)/1000, 1)} t-CO₂</p>
-            </div>
-            <div class="card">
-                <h3>Scope3</h3>
-                <p>{round(float(report.scope3_reduction_kg)/1000, 1)} t-CO₂</p>
-            </div>
-            <div class="card">
-                <h3>合計</h3>
-                <p>{report.total_reduction_tonnes} t-CO₂</p>
-            </div>
-        </div>
+        writer.writerow(["CSRレポート - 従業員CO2削減実績"])
+        writer.writerow(["期間", f"{range_start} ～ {range_end}"])
+        writer.writerow(["総CO2削減量(kg)", round(total_co2, 2)])
+        writer.writerow(["参加者数", len(results)])
+        writer.writerow([])
+        writer.writerow(["順位", "氏名", "部門", "CO2削減量(kg)"])
         
-        <h3>削減量内訳</h3>
-        <table>
-            <thead>
-                <tr>
-                    <th>サイト名</th>
-                    <th>設備名</th>
-                    <th>Scope</th>
-                    <th>削減量(kg)</th>
-                    <th>削減量(t-CO₂)</th>
-                </tr>
-            </thead>
-            <tbody>
-                {"".join([f"<tr><td>{item.site_name}</td><td>{item.device_name}</td><td>{item.scope}</td><td>{float(item.amount_kg):,}</td><td>{round(float(item.amount_kg)/1000, 1)}</td></tr>" for item in report.items])}
-            </tbody>
-        </table>
+        for rank, result in enumerate(results[:20], 1):
+            writer.writerow([
+                rank,
+                result.user_name or f"ユーザー{result.user_id}",
+                result.department or "未設定",
+                round(result.total_co2_reduction or 0, 2)
+            ])
         
-        {f"<h3>備考</h3><p>{report.notes}</p>" if report.notes else ""}
+        writer.writerow([])
+        writer.writerow(["注意事項"])
+        writer.writerow(["本データは従業員の個人生活におけるエネルギー削減実績です"])
+        writer.writerow(["企業の直接的な排出削減とは異なりますが、CSRとして活用可能です"])
         
-        <p><small>方法論: {report.methodology}</small></p>
-    </body>
-    </html>
-    """
-    
-    return Response(
-        content=html_content.encode('utf-8'),
-        media_type="text/html",
-        headers={"Content-Disposition": f"inline; filename=report_{report.name}.html"}
-    )
+        csv_content = output.getvalue().encode('utf-8-sig')
+        output.close()
+        
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=csr_report_{range_start}_{range_end}.csv"}
+        )

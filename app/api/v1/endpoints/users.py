@@ -1,4 +1,4 @@
-from typing import Any, List
+from typing import Any, List, Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -13,7 +13,7 @@ router = APIRouter()
 @router.post("/", response_model=User)
 def create_user(
     *,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
     user_in: UserCreate,
 ) -> Any:
     """
@@ -32,11 +32,11 @@ def create_user(
 @router.put("/me", response_model=User)
 def update_user_me(
     *,
-    db: Session = Depends(get_db),
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
     password: str = None,
     full_name: str = None,
     email: str = None,
-    current_user: User = Depends(get_current_active_user),
 ) -> Any:
     """
     Update own user.
@@ -54,7 +54,7 @@ def update_user_me(
 
 @router.get("/me", response_model=User)
 def read_user_me(
-    current_user: User = Depends(get_current_active_user),
+    current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> Any:
     """
     Get current user.
