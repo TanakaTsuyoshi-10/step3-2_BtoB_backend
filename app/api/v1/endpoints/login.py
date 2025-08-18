@@ -1,5 +1,5 @@
 from datetime import timedelta
-from typing import Any
+from typing import Any, Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
@@ -17,7 +17,8 @@ router = APIRouter()
 
 @router.post("/login/access-token", response_model=Token)
 def login_access_token(
-    db: Session = Depends(get_db), form_data: OAuth2PasswordRequestForm = Depends()
+    db: Annotated[Session, Depends(get_db)],
+    form_data: Annotated[OAuth2PasswordRequestForm, Depends()]
 ) -> Any:
     """
     OAuth2 compatible token login, get an access token for future requests
@@ -28,12 +29,12 @@ def login_access_token(
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+            detail="メールアドレスまたはパスワードが正しくありません",
             headers={"WWW-Authenticate": "Bearer"},
         )
     elif not user_service.is_active(user):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user"
+            status_code=status.HTTP_400_BAD_REQUEST, detail="アカウントが無効になっています"
         )
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     return {
@@ -45,7 +46,7 @@ def login_access_token(
 
 
 @router.post("/login/test-token", response_model=User)
-def test_token(current_user: User = Depends(get_current_user)) -> Any:
+def test_token(current_user: Annotated[User, Depends(get_current_user)]) -> Any:
     """
     Test access token
     """

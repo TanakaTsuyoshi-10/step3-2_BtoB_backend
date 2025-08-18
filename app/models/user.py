@@ -19,3 +19,7 @@ class User(Base):
     # Relationships
     devices = relationship("Device", back_populates="owner")
     energy_records = relationship("EnergyRecord", back_populates="user")
+    employee = relationship("Employee", back_populates="user", uselist=False)
+    reduction_records = relationship("ReductionRecord", back_populates="user")
+    points_ledger = relationship("PointsLedger", back_populates="user")
+    redemptions = relationship("Redemption", back_populates="user")
