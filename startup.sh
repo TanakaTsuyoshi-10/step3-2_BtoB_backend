@@ -3,6 +3,7 @@
 # Azure App Service startup script for FastAPI application (prebuilt venv)
 
 echo "Starting Azure App Service deployment with prebuilt venv..."
+echo "BtoBtoC Energy Management System - Production Deployment $(date)"
 
 # Set environment variables for Python
 export PYTHONPATH=/home/site/wwwroot:$PYTHONPATH
