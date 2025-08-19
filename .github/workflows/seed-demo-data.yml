@@ -1,0 +1,59 @@
+name: Seed Demo Data
+
+on:
+  workflow_dispatch:
+    inputs:
+      users_per_company:
+        description: 'Number of users per company'
+        required: false
+        default: '200'
+      months_of_data:
+        description: 'Number of months of historical data'
+        required: false
+        default: '12'
+      replace_existing:
+        description: 'Replace existing data (true/false)'
+        required: false
+        default: 'false'
+
+env:
+  MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
+  MYSQL_USER: ${{ secrets.MYSQL_USER }}
+  MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+  MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
+  SECRET_KEY: ${{ secrets.SECRET_KEY }}
+  ACCESS_TOKEN_EXPIRE_MINUTES: ${{ secrets.ACCESS_TOKEN_EXPIRE_MINUTES }}
+  ALGORITHM: ${{ secrets.ALGORITHM }}
+  MYSQL_URL: mysql+mysqlconnector://${{ secrets.MYSQL_USER }}:${{ secrets.MYSQL_PASSWORD }}@${{ secrets.MYSQL_HOST }}:3306/${{ secrets.MYSQL_DATABASE }}
+
+jobs:
+  seed-demo-data:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Run database migrations
+      run: |
+        alembic upgrade head
+        
+    - name: Seed demo data
+      env:
+        SEED_ALLOW: 1
+        PYTHONPATH: ${{ github.workspace }}
+      run: |
+        python -m app.seeds.seed_demo \
+          --users ${{ github.event.inputs.users_per_company }} \
+          --months ${{ github.event.inputs.months_of_data }} \
+          ${{ github.event.inputs.replace_existing == 'true' && '--replace' || '' }}
