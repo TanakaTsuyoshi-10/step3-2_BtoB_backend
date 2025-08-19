@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Azure App Service startup script for FastAPI application
+# Azure App Service startup script for FastAPI application (prebuilt venv)
 
-echo "Starting Azure App Service deployment..."
+echo "Starting Azure App Service deployment with prebuilt venv..."
 
 # Set environment variables for Python
 export PYTHONPATH=/home/site/wwwroot:$PYTHONPATH
@@ -10,9 +10,26 @@ export PYTHONPATH=/home/site/wwwroot:$PYTHONPATH
 # Change to application directory
 cd /home/site/wwwroot
 
+# Verify antenv exists
+if [ ! -d "antenv" ]; then
+    echo "ERROR: antenv directory not found! Prebuilt venv may have been destroyed by Oryx."
+    echo "Please ensure SCM_DO_BUILD_DURING_DEPLOYMENT is set to 0 or false."
+    exit 1
+fi
+
+# Use prebuilt venv Python
+PYTHON_PATH="/home/site/wwwroot/antenv/bin/python"
+if [ ! -f "$PYTHON_PATH" ]; then
+    echo "ERROR: Python binary not found at $PYTHON_PATH"
+    exit 1
+fi
+
+echo "Using Python: $PYTHON_PATH"
+$PYTHON_PATH --version
+
 # Wait for database to be ready (optional, but recommended)
 echo "Waiting for database connection..."
-python -c "
+$PYTHON_PATH -c "
 import time
 import sys
 from app.core.config import settings
@@ -35,9 +52,9 @@ for i in range(max_retries):
             sys.exit(1)
 "
 
-# Run Alembic migrations
+# Run Alembic migrations with prebuilt venv
 echo "Running database migrations..."
-alembic upgrade head
+$PYTHON_PATH -m alembic upgrade head
 
 if [ $? -ne 0 ]; then
     echo "Database migration failed"
@@ -46,9 +63,9 @@ fi
 
 echo "Database migrations completed successfully"
 
-# Start Gunicorn server
+# Start Gunicorn server with prebuilt venv
 echo "Starting Gunicorn server..."
-exec gunicorn \
+exec /home/site/wwwroot/antenv/bin/gunicorn \
     --bind=0.0.0.0:8000 \
     --workers=4 \
     --worker-class=uvicorn.workers.UvicornWorker \
