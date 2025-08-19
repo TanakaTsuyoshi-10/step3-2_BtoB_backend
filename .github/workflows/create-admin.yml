@@ -1,0 +1,95 @@
+name: Create Admin User
+
+on:
+  workflow_dispatch:
+    inputs:
+      admin_email:
+        description: 'Admin email address'
+        required: false
+        default: 'admin@example.com'
+      admin_password:
+        description: 'Admin password'
+        required: false
+        default: 'admin123'
+
+env:
+  MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
+  MYSQL_USER: ${{ secrets.MYSQL_USER }}
+  MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+  MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
+  SECRET_KEY: ${{ secrets.SECRET_KEY }}
+  ACCESS_TOKEN_EXPIRE_MINUTES: ${{ secrets.ACCESS_TOKEN_EXPIRE_MINUTES }}
+  ALGORITHM: ${{ secrets.ALGORITHM }}
+  MYSQL_URL: mysql+mysqlconnector://${{ secrets.MYSQL_USER }}:${{ secrets.MYSQL_PASSWORD }}@${{ secrets.MYSQL_HOST }}:3306/${{ secrets.MYSQL_DATABASE }}
+
+jobs:
+  create-admin:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Create admin user script
+      run: |
+        cat > create_admin.py << 'EOF'
+        import sys
+        sys.path.append('.')
+        from app.db.database import SessionLocal
+        from app.models.user import User
+        from app.core.security import get_password_hash
+        
+        def create_admin(email, password):
+            db = SessionLocal()
+            try:
+                print(f"Creating/updating admin user: {email}")
+                
+                # Check if admin exists
+                admin = db.query(User).filter(User.email == email).first()
+                if admin:
+                    # Update existing admin
+                    admin.hashed_password = get_password_hash(password)
+                    admin.is_active = True
+                    admin.is_superuser = True
+                    print('✅ Updated existing admin user')
+                else:
+                    # Create new admin
+                    admin = User(
+                        email=email,
+                        hashed_password=get_password_hash(password),
+                        full_name='システム管理者',
+                        is_active=True,
+                        is_superuser=True
+                    )
+                    db.add(admin)
+                    print('✅ Created new admin user')
+                
+                db.commit()
+                print(f'🎉 Admin user {admin.email} is ready!')
+                print(f'   Email: {email}')
+                print(f'   Password: {password}')
+                return True
+                
+            except Exception as e:
+                print(f'❌ Error: {e}')
+                db.rollback()
+                return False
+            finally:
+                db.close()
+        
+        if __name__ == "__main__":
+            success = create_admin('${{ github.event.inputs.admin_email }}', '${{ github.event.inputs.admin_password }}')
+            sys.exit(0 if success else 1)
+        EOF
+        
+        python create_admin.py

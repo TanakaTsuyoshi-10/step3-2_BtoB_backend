@@ -6,7 +6,7 @@ on:
       users_per_company:
         description: 'Number of users per company'
         required: false
-        default: '200'
+        default: '50'
       months_of_data:
         description: 'Number of months of historical data'
         required: false
@@ -14,7 +14,7 @@ on:
       replace_existing:
         description: 'Replace existing data (true/false)'
         required: false
-        default: 'false'
+        default: 'true'
 
 env:
   MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
@@ -53,7 +53,13 @@ jobs:
         SEED_ALLOW: 1
         PYTHONPATH: ${{ github.workspace }}
       run: |
-        python -m app.seeds.seed_demo \
+        if [ "${{ github.event.inputs.replace_existing }}" = "true" ]; then
+          REPLACE_FLAG="--replace"
+        else
+          REPLACE_FLAG=""
+        fi
+        
+        python app/seeds/seed_demo.py \
           --users ${{ github.event.inputs.users_per_company }} \
           --months ${{ github.event.inputs.months_of_data }} \
-          ${{ github.event.inputs.replace_existing == 'true' && '--replace' || '' }}
+          $REPLACE_FLAG
