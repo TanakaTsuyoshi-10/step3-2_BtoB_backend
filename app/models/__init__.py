@@ -8,6 +8,10 @@ from .points_ledger import PointsLedger
 from .reward import Reward
 from .redemption import Redemption
 from .report_job import ReportJob
+from .company import Company
+from .point import Point
+from .ranking import Ranking
 
 __all__ = ["User", "Device", "EnergyRecord", "Employee", "ReductionRecord", 
-           "PointRule", "PointsLedger", "Reward", "Redemption", "ReportJob"]
+           "PointRule", "PointsLedger", "Reward", "Redemption", "ReportJob",
+           "Company", "Point", "Ranking"]
