@@ -1,0 +1,292 @@
+name: Seed Production Data
+
+on:
+  workflow_dispatch:
+
+env:
+  MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
+  MYSQL_USER: ${{ secrets.MYSQL_USER }}
+  MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+  MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
+  SECRET_KEY: ${{ secrets.SECRET_KEY }}
+  ACCESS_TOKEN_EXPIRE_MINUTES: ${{ secrets.ACCESS_TOKEN_EXPIRE_MINUTES }}
+  ALGORITHM: ${{ secrets.ALGORITHM }}
+  MYSQL_URL: mysql+mysqlconnector://${{ secrets.MYSQL_USER }}:${{ secrets.MYSQL_PASSWORD }}@${{ secrets.MYSQL_HOST }}:3306/${{ secrets.MYSQL_DATABASE }}
+
+jobs:
+  seed-production:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Run Alembic migrations
+      run: |
+        alembic upgrade head
+        
+    - name: Seed production data
+      run: |
+        cat > seed_prod.py << 'EOF'
+        import sys
+        sys.path.append('.')
+        from app.db.database import SessionLocal
+        from app.models.company import Company
+        from app.models.user import User
+        from app.models.employee import Employee
+        from app.models.device import Device
+        from app.models.energy_record import EnergyRecord
+        from app.models.point import Point
+        from app.models.ranking import Ranking
+        from app.models.reward import Reward
+        from app.core.security import get_password_hash
+        from datetime import datetime, timedelta
+        import random
+        
+        def seed_production():
+            db = SessionLocal()
+            try:
+                print("🌱 Starting production seeding...")
+                
+                # 1. Ensure company exists
+                company = db.query(Company).filter(Company.id == 1).first()
+                if not company:
+                    company = Company(
+                        id=1,
+                        company_name="SCOPE3_HOLDINGS",
+                        industry="エネルギーマネジメント",
+                        address="東京都渋谷区"
+                    )
+                    db.add(company)
+                    db.flush()
+                    print("✅ Company created")
+                
+                # 2. Create demo users and employees
+                departments = ["営業部", "開発部", "マーケティング部", "人事部", "総務部"]
+                user_count = 0
+                
+                for i in range(1, 16):  # 15 users
+                    email = f"employee{i:03d}@scope3holdings.co.jp"
+                    
+                    # Check if user exists
+                    existing_user = db.query(User).filter(User.email == email).first()
+                    if existing_user:
+                        continue
+                    
+                    # Create user
+                    user = User(
+                        email=email,
+                        hashed_password=get_password_hash("demo123"),
+                        full_name=f"社員{i:03d}",
+                        is_active=i <= 8,  # First 8 are active
+                        is_superuser=False
+                    )
+                    db.add(user)
+                    db.flush()
+                    
+                    # Create employee
+                    employee = Employee(
+                        user_id=user.id,
+                        company_id=1,
+                        department=departments[(i-1) % len(departments)],
+                        employee_code=f"EMP{i:03d}"
+                    )
+                    db.add(employee)
+                    user_count += 1
+                
+                print(f"✅ Created {user_count} users and employees")
+                
+                # 3. Create devices
+                users = db.query(User).join(Employee).filter(Employee.company_id == 1).all()
+                device_types = [
+                    ("スマートメーター", "電力"),
+                    ("ガスメーター", "ガス"),
+                    ("エアコン", "電力"),
+                    ("照明システム", "電力"),
+                    ("ガス給湯器", "ガス")
+                ]
+                
+                device_count = 0
+                for user in users:
+                    employee = db.query(Employee).filter(Employee.user_id == user.id).first()
+                    
+                    for i in range(2):  # 2 devices per user
+                        device_name, energy_type = random.choice(device_types)
+                        
+                        # Check if device exists
+                        existing_device = db.query(Device).filter(
+                            Device.user_id == user.id,
+                            Device.device_name == f"{device_name}_{i+1}"
+                        ).first()
+                        
+                        if not existing_device:
+                            device = Device(
+                                user_id=user.id,
+                                device_name=f"{device_name}_{i+1}",
+                                device_type=device_name,
+                                location=employee.department if employee else "オフィス",
+                                energy_type=energy_type,
+                                is_active=True
+                            )
+                            db.add(device)
+                            device_count += 1
+                
+                print(f"✅ Created {device_count} devices")
+                
+                # 4. Create energy records
+                devices = db.query(Device).join(User).join(Employee).filter(
+                    Employee.company_id == 1
+                ).all()
+                
+                # Monthly data (realistic ranges)
+                electricity_data = [1850, 1920, 2100, 2050, 1980, 1650, 1800, 2000, 1700, 1600, 1550, 1400]
+                gas_data = [90, 95, 100, 98, 105, 82, 88, 92, 85, 83, 84, 81]
+                
+                record_count = 0
+                current_date = datetime.now()
+                
+                for month_offset in range(12):
+                    target_date = current_date - timedelta(days=month_offset * 30)
+                    target_year = target_date.year
+                    target_month = target_date.month
+                    record_date = datetime(target_year, target_month, 1)
+                    
+                    month_index = (target_month - 1) % 12
+                    
+                    # Distribute usage across devices
+                    electricity_devices = [d for d in devices if d.energy_type == "電力"]
+                    gas_devices = [d for d in devices if d.energy_type == "ガス"]
+                    
+                    if electricity_devices:
+                        usage_per_device = electricity_data[month_index] / len(electricity_devices)
+                        for device in electricity_devices:
+                            # Check if record exists
+                            existing = db.query(EnergyRecord).filter(
+                                EnergyRecord.device_id == device.id,
+                                EnergyRecord.recorded_at == record_date
+                            ).first()
+                            
+                            if not existing:
+                                variation = random.uniform(0.8, 1.2)
+                                actual_usage = usage_per_device * variation
+                                co2_emission = actual_usage * 0.518  # CO2 factor
+                                
+                                record = EnergyRecord(
+                                    device_id=device.id,
+                                    recorded_at=record_date,
+                                    usage=round(actual_usage, 2),
+                                    unit="kWh",
+                                    co2_emission=round(co2_emission, 3)
+                                )
+                                db.add(record)
+                                record_count += 1
+                    
+                    if gas_devices:
+                        usage_per_device = gas_data[month_index] / len(gas_devices)
+                        for device in gas_devices:
+                            existing = db.query(EnergyRecord).filter(
+                                EnergyRecord.device_id == device.id,
+                                EnergyRecord.recorded_at == record_date
+                            ).first()
+                            
+                            if not existing:
+                                variation = random.uniform(0.8, 1.2)
+                                actual_usage = usage_per_device * variation
+                                co2_emission = actual_usage * 2.23  # CO2 factor for gas
+                                
+                                record = EnergyRecord(
+                                    device_id=device.id,
+                                    recorded_at=record_date,
+                                    usage=round(actual_usage, 2),
+                                    unit="m³",
+                                    co2_emission=round(co2_emission, 3)
+                                )
+                                db.add(record)
+                                record_count += 1
+                
+                print(f"✅ Created {record_count} energy records")
+                
+                # 5. Create points
+                point_count = 0
+                for user in users:
+                    for month_offset in range(6):  # Last 6 months
+                        date = current_date - timedelta(days=month_offset * 30)
+                        points = random.randint(100, 500)
+                        
+                        existing_point = db.query(Point).filter(
+                            Point.user_id == user.id,
+                            Point.earned_at.between(
+                                datetime(date.year, date.month, 1),
+                                datetime(date.year, date.month, 28)
+                            )
+                        ).first()
+                        
+                        if not existing_point:
+                            point = Point(
+                                user_id=user.id,
+                                company_id=1,
+                                points=points,
+                                reason=f"月間エネルギー削減達成 ({date.strftime('%Y年%m月')})",
+                                earned_at=date
+                            )
+                            db.add(point)
+                            point_count += 1
+                
+                print(f"✅ Created {point_count} point records")
+                
+                # 6. Create rewards
+                rewards_data = [
+                    ("エコバッグ", 100, "環境に優しいエコバッグ"),
+                    ("コーヒー券", 150, "社内カフェで使えるコーヒー券"),
+                    ("図書券", 300, "本やe-bookの購入に使える図書券"),
+                    ("観葉植物", 250, "デスクに置ける小さな観葉植物"),
+                    ("ギフトカード", 500, "汎用ギフトカード（5000円分）")
+                ]
+                
+                reward_count = 0
+                for name, points_required, description in rewards_data:
+                    existing = db.query(Reward).filter(
+                        Reward.company_id == 1,
+                        Reward.reward_name == name
+                    ).first()
+                    
+                    if not existing:
+                        reward = Reward(
+                            company_id=1,
+                            reward_name=name,
+                            points_required=points_required,
+                            description=description,
+                            is_active=True
+                        )
+                        db.add(reward)
+                        reward_count += 1
+                
+                print(f"✅ Created {reward_count} rewards")
+                
+                db.commit()
+                print("✅ All data committed successfully")
+                return True
+                
+            except Exception as e:
+                print(f"❌ Error: {e}")
+                db.rollback()
+                return False
+            finally:
+                db.close()
+        
+        if __name__ == "__main__":
+            success = seed_production()
+            print(f"Final result: {'SUCCESS' if success else 'FAILED'}")
+        EOF
+        
+        python seed_prod.py
