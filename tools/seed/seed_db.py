@@ -135,17 +135,16 @@ class DatabaseSeeder:
                 
                 # Check if device already exists
                 existing_device = self.session.query(Device).filter(
-                    Device.user_id == user.id,
-                    Device.device_name == f"{device_name}_{i+1}"
+                    Device.owner_id == user.id,
+                    Device.name == f"{device_name}_{i+1}"
                 ).first()
                 
                 if not existing_device:
                     device = Device(
-                        user_id=user.id,
-                        device_name=f"{device_name}_{i+1}",
+                        owner_id=user.id,
+                        name=f"{device_name}_{i+1}",
                         device_type=device_name,
                         location=employee.department,
-                        energy_type=energy_type,
                         is_active=True
                     )
                     self.session.add(device)
@@ -158,8 +157,8 @@ class DatabaseSeeder:
         """Create energy usage records for last 12 months"""
         print("⚡ Creating energy records...")
         
-        # Get all active devices
-        devices = self.session.query(Device).join(Employee).filter(
+        # Get all active devices for company employees
+        devices = self.session.query(Device).join(User).join(Employee).filter(
             Employee.company_id == config.company_id,
             Device.is_active == True
         ).all()
@@ -193,8 +192,12 @@ class DatabaseSeeder:
             total_gas = gas_data[month_index]
             total_co2 = co2_data[month_index]
             
-            electricity_devices = [d for d in devices if d.energy_type == "電力"]
-            gas_devices = [d for d in devices if d.energy_type == "ガス"]
+            # Map device types to energy types
+            electricity_types = ["スマートメーター", "エアコン", "照明システム", "冷蔵庫", "electric_meter"]
+            gas_types = ["ガスメーター", "ガス給湯器", "暖房器具", "gas_meter"]
+            
+            electricity_devices = [d for d in devices if d.device_type in electricity_types]
+            gas_devices = [d for d in devices if d.device_type in gas_types]
             
             # Create electricity records
             if electricity_devices:
@@ -205,21 +208,20 @@ class DatabaseSeeder:
                     # Check if record already exists
                     existing = self.session.query(EnergyRecord).filter(
                         EnergyRecord.device_id == device.id,
-                        EnergyRecord.recorded_at == record_date
+                        EnergyRecord.timestamp == record_date
                     ).first()
                     
                     if not existing:
                         # Add some variation
                         variation = random.uniform(0.8, 1.2)
                         actual_usage = usage_per_device * variation
-                        actual_co2 = co2_per_device * variation
                         
                         record = EnergyRecord(
                             device_id=device.id,
-                            recorded_at=record_date,
-                            usage=round(actual_usage, 2),
-                            unit="kWh",
-                            co2_emission=round(actual_co2, 3)
+                            user_id=device.owner_id,
+                            timestamp=record_date,
+                            energy_consumed=round(actual_usage, 2),
+                            power=round(actual_usage / 30, 2)
                         )
                         self.session.add(record)
                         created_count += 1
@@ -231,22 +233,19 @@ class DatabaseSeeder:
                 for device in gas_devices:
                     existing = self.session.query(EnergyRecord).filter(
                         EnergyRecord.device_id == device.id,
-                        EnergyRecord.recorded_at == record_date
+                        EnergyRecord.timestamp == record_date
                     ).first()
                     
                     if not existing:
                         variation = random.uniform(0.8, 1.2)
                         actual_usage = usage_per_device * variation
                         
-                        # CO2 factor for gas: 2.23 kg-CO2/m³
-                        actual_co2 = actual_usage * 2.23
-                        
                         record = EnergyRecord(
                             device_id=device.id,
-                            recorded_at=record_date,
-                            usage=round(actual_usage, 2),
-                            unit="m³",
-                            co2_emission=round(actual_co2, 3)
+                            user_id=device.owner_id,
+                            timestamp=record_date,
+                            energy_consumed=round(actual_usage, 2),
+                            power=round(actual_usage / 30, 2)
                         )
                         self.session.add(record)
                         created_count += 1
@@ -267,20 +266,19 @@ class DatabaseSeeder:
                 for device in electricity_devices[:3]:  # Limit to first 3 devices
                     existing = self.session.query(EnergyRecord).filter(
                         EnergyRecord.device_id == device.id,
-                        EnergyRecord.recorded_at == record_date
+                        EnergyRecord.timestamp == record_date
                     ).first()
                     
                     if not existing:
                         variation = random.uniform(0.9, 1.1)
                         actual_usage = usage_per_device * variation
-                        actual_co2 = actual_usage * 0.518  # CO2 factor for electricity
                         
                         record = EnergyRecord(
                             device_id=device.id,
-                            recorded_at=record_date,
-                            usage=round(actual_usage, 2),
-                            unit="kWh",
-                            co2_emission=round(actual_co2, 3)
+                            user_id=device.owner_id,
+                            timestamp=record_date,
+                            energy_consumed=round(actual_usage, 2),
+                            power=round(actual_usage / 30, 2)
                         )
                         self.session.add(record)
                         created_count += 1
@@ -292,20 +290,19 @@ class DatabaseSeeder:
                 for device in gas_devices[:2]:  # Limit to first 2 devices
                     existing = self.session.query(EnergyRecord).filter(
                         EnergyRecord.device_id == device.id,
-                        EnergyRecord.recorded_at == record_date
+                        EnergyRecord.timestamp == record_date
                     ).first()
                     
                     if not existing:
                         variation = random.uniform(0.9, 1.1)
                         actual_usage = usage_per_device * variation
-                        actual_co2 = actual_usage * 2.23
                         
                         record = EnergyRecord(
                             device_id=device.id,
-                            recorded_at=record_date,
-                            usage=round(actual_usage, 2),
-                            unit="m³",
-                            co2_emission=round(actual_co2, 3)
+                            user_id=device.owner_id,
+                            timestamp=record_date,
+                            energy_consumed=round(actual_usage, 2),
+                            power=round(actual_usage / 30, 2)
                         )
                         self.session.add(record)
                         created_count += 1
@@ -413,17 +410,17 @@ class DatabaseSeeder:
         for reward_item in rewards_data:
             # Check if reward already exists
             existing_reward = self.session.query(Reward).filter(
-                Reward.company_id == config.company_id,
-                Reward.reward_name == reward_item['reward_name']
+                Reward.title == reward_item['reward_name']
             ).first()
             
             if not existing_reward:
                 reward = Reward(
-                    company_id=config.company_id,
-                    reward_name=reward_item['reward_name'],
+                    title=reward_item['reward_name'],
                     points_required=reward_item['points_required'],
                     description=reward_item['description'],
-                    is_active=reward_item['is_active']
+                    category="エネルギー削減",
+                    stock=100,
+                    active=reward_item['is_active']
                 )
                 self.session.add(reward)
                 created_count += 1
@@ -440,18 +437,16 @@ class DatabaseSeeder:
             'employees': self.session.query(Employee).filter(
                 Employee.company_id == config.company_id
             ).count(),
-            'devices': self.session.query(Device).join(Employee).filter(
+            'devices': self.session.query(Device).join(User).join(Employee).filter(
                 Employee.company_id == config.company_id
             ).count(),
-            'energy_records': self.session.query(EnergyRecord).join(Device).join(Employee).filter(
+            'energy_records': self.session.query(EnergyRecord).join(Device).join(User).join(Employee).filter(
                 Employee.company_id == config.company_id
             ).count(),
             'points': self.session.query(Point).filter(
                 Point.company_id == config.company_id
             ).count(),
-            'rewards': self.session.query(Reward).filter(
-                Reward.company_id == config.company_id
-            ).count(),
+            'rewards': self.session.query(Reward).count(),
             'rankings': self.session.query(Ranking).filter(
                 Ranking.company_id == config.company_id
             ).count()
@@ -510,32 +505,42 @@ def get_database_metrics() -> Dict[str, Any]:
             # Get total energy usage for current month
             current_month_start = datetime(config.current_year, config.current_month, 1)
             
-            electricity_total = seeder.session.query(EnergyRecord).join(Device).join(Employee).filter(
-                Employee.company_id == config.company_id,
-                EnergyRecord.unit == "kWh",
-                EnergyRecord.recorded_at >= current_month_start
-            ).with_entities(EnergyRecord.usage).all()
+            # Get electricity usage (from electricity devices)
+            electricity_types = ["スマートメーター", "エアコン", "照明システム", "冷蔵庫", "electric_meter"]
+            gas_types = ["ガスメーター", "ガス給湯器", "暖房器具", "gas_meter"]
             
-            gas_total = seeder.session.query(EnergyRecord).join(Device).join(Employee).filter(
+            electricity_total = seeder.session.query(EnergyRecord).join(Device).join(User).join(Employee).filter(
                 Employee.company_id == config.company_id,
-                EnergyRecord.unit == "m³",
-                EnergyRecord.recorded_at >= current_month_start
-            ).with_entities(EnergyRecord.usage).all()
+                Device.device_type.in_(electricity_types),
+                EnergyRecord.timestamp >= current_month_start
+            ).with_entities(EnergyRecord.energy_consumed).all()
             
-            co2_total = seeder.session.query(EnergyRecord).join(Device).join(Employee).filter(
+            gas_total = seeder.session.query(EnergyRecord).join(Device).join(User).join(Employee).filter(
                 Employee.company_id == config.company_id,
-                EnergyRecord.recorded_at >= current_month_start
-            ).with_entities(EnergyRecord.co2_emission).all()
+                Device.device_type.in_(gas_types),
+                EnergyRecord.timestamp >= current_month_start
+            ).with_entities(EnergyRecord.energy_consumed).all()
+            
+            # Calculate CO2 based on device types and usage
+            all_energy_records = seeder.session.query(EnergyRecord).join(Device).join(User).join(Employee).filter(
+                Employee.company_id == config.company_id,
+                EnergyRecord.timestamp >= current_month_start
+            ).all()
             
             active_users = seeder.session.query(Employee).filter(
                 Employee.company_id == config.company_id
             ).count()
             
+            # Calculate CO2 emissions from usage
+            electricity_sum = sum(e[0] if e[0] else 0 for e in electricity_total)
+            gas_sum = sum(g[0] if g[0] else 0 for g in gas_total)
+            co2_total = (electricity_sum * 0.518) + (gas_sum * 2.23)  # CO2 factors
+            
             return {
                 'active_users': active_users,
-                'electricity_total_kwh': sum(e[0] for e in electricity_total),
-                'gas_total_m3': sum(g[0] for g in gas_total),
-                'co2_reduction_total_kg': sum(c[0] for c in co2_total)
+                'electricity_total_kwh': electricity_sum,
+                'gas_total_m3': gas_sum,
+                'co2_reduction_total_kg': co2_total
             }
             
     except Exception as e:
