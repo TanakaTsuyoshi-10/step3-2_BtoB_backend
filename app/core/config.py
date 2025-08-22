@@ -40,8 +40,11 @@ class Settings(BaseSettings):
     # CORS - Support both ALLOWED_ORIGINS and BACKEND_CORS_ORIGINS
     ALLOWED_ORIGINS: List[str] = [
         "http://localhost:3000", 
+        "http://localhost:3001",
         "https://localhost:3000",
-        "https://app-002-gen10-step3-2-node-oshima2.azurewebsites.net"
+        "https://localhost:3001", 
+        "https://app-002-gen10-step3-2-node-oshima2.azurewebsites.net",
+        "https://<your-mobile-app-service-name>.azurewebsites.net"
     ]
     BACKEND_CORS_ORIGINS: Optional[Union[str, List[str]]] = None
     

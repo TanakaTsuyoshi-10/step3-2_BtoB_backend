@@ -2,12 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 from datetime import datetime, timedelta
 from pydantic import BaseModel
-from app.api.deps import get_current_admin_user
+from app.auth.deps import get_current_admin_user
 from app.db.database import get_db
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func
 from app.models.user import User
 from app.models.point import Point
+from app.models.employee import Employee
 from app.models.energy_record import EnergyRecord
 
 router = APIRouter()
@@ -60,20 +61,20 @@ async def get_points_summary(
         start = end - timedelta(days=30)
     
     # 全体統計
-    total_earned = db.query(func.sum(Point.amount)).filter(
-        Point.created_at.between(start, end),
-        Point.amount > 0
+    total_earned = db.query(func.sum(Point.points)).filter(
+        Point.earned_at.between(start, end),
+        Point.points > 0
     ).scalar() or 0
     
-    total_used = db.query(func.sum(Point.amount)).filter(
-        Point.created_at.between(start, end),
-        Point.amount < 0
+    total_used = db.query(func.sum(Point.points)).filter(
+        Point.earned_at.between(start, end),
+        Point.points < 0
     ).scalar() or 0
     
-    total_employees = db.query(User).filter(User.role == "employee").count()
+    total_employees = db.query(User).join(Employee).count()
     
     active_employees = db.query(func.count(func.distinct(Point.user_id))).filter(
-        Point.created_at.between(start, end)
+        Point.earned_at.between(start, end)
     ).scalar() or 0
     
     average_points = total_earned / total_employees if total_employees > 0 else 0
@@ -81,9 +82,9 @@ async def get_points_summary(
     # 前月比較
     prev_start = start - timedelta(days=30)
     prev_end = start
-    prev_earned = db.query(func.sum(Point.amount)).filter(
-        Point.created_at.between(prev_start, prev_end),
-        Point.amount > 0
+    prev_earned = db.query(func.sum(Point.points)).filter(
+        Point.earned_at.between(prev_start, prev_end),
+        Point.points > 0
     ).scalar() or 0
     
     growth_rate = ((total_earned - prev_earned) / prev_earned * 100) if prev_earned > 0 else 0
@@ -110,53 +111,56 @@ async def get_employee_points(
 ):
     """従業員別ポイント詳細データを取得"""
     
-    # 基本クエリ
-    query = db.query(User).filter(User.role == "employee")
+    # 基本クエリ - Employeeレコードがあるユーザーのみ
+    query = db.query(User).join(Employee)
     
     # 検索フィルター
     if search:
-        query = query.filter(User.name.contains(search))
+        query = query.filter(User.full_name.contains(search))
     
     if department:
-        query = query.filter(User.department == department)
+        query = query.filter(Employee.department == department)
     
     users = query.offset(skip).limit(limit).all()
     
     result = []
     for user in users:
         # ユーザーのポイント統計
-        total_earned = db.query(func.sum(Point.amount)).filter(
+        total_earned = db.query(func.sum(Point.points)).filter(
             Point.user_id == user.id,
-            Point.amount > 0
+            Point.points > 0
         ).scalar() or 0
         
-        total_used = db.query(func.sum(Point.amount)).filter(
+        total_used = db.query(func.sum(Point.points)).filter(
             Point.user_id == user.id,
-            Point.amount < 0
+            Point.points < 0
         ).scalar() or 0
         
         current_balance = total_earned + total_used
         
         # 今月の獲得ポイント
         month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        monthly_earned = db.query(func.sum(Point.amount)).filter(
+        monthly_earned = db.query(func.sum(Point.points)).filter(
             Point.user_id == user.id,
-            Point.amount > 0,
-            Point.created_at >= month_start
+            Point.points > 0,
+            Point.earned_at >= month_start
         ).scalar() or 0
         
         # 利用率
         utilization_rate = (abs(total_used) / total_earned * 100) if total_earned > 0 else 0
         
         # 最後の活動
-        last_activity = db.query(Point.created_at).filter(
+        last_activity = db.query(Point.earned_at).filter(
             Point.user_id == user.id
-        ).order_by(Point.created_at.desc()).first()
+        ).order_by(Point.earned_at.desc()).first()
+        
+        # 従業員情報取得
+        employee = db.query(Employee).filter(Employee.user_id == user.id).first()
         
         result.append(EmployeePointsData(
             user_id=user.id,
-            employee_name=user.name,
-            department=user.department or "未設定",
+            employee_name=user.full_name or user.email,
+            department=employee.department if employee else "未設定",
             total_points=total_earned,
             current_balance=current_balance,
             monthly_earned=monthly_earned,
@@ -182,19 +186,18 @@ async def get_department_distribution(
     """部門別ポイント分布を取得"""
     
     departments = db.query(
-        User.department,
-        func.count(User.id).label('employee_count')
+        Employee.department,
+        func.count(Employee.id).label('employee_count')
     ).filter(
-        User.role == "employee",
-        User.department.isnot(None)
-    ).group_by(User.department).all()
+        Employee.department.isnot(None)
+    ).group_by(Employee.department).all()
     
     result = []
     for dept_name, emp_count in departments:
         # 部門の総ポイント
-        total_points = db.query(func.sum(Point.amount)).join(User).filter(
-            User.department == dept_name,
-            Point.amount > 0
+        total_points = db.query(func.sum(Point.points)).join(User).join(Employee).filter(
+            Employee.department == dept_name,
+            Point.points > 0
         ).scalar() or 0
         
         average_points = total_points / emp_count if emp_count > 0 else 0
@@ -227,20 +230,20 @@ async def get_monthly_trends(
             next_month_start = month_start.replace(month=month_start.month + 1)
         
         # 月間獲得ポイント
-        earned = db.query(func.sum(Point.amount)).filter(
-            Point.created_at.between(month_start, next_month_start),
-            Point.amount > 0
+        earned = db.query(func.sum(Point.points)).filter(
+            Point.earned_at.between(month_start, next_month_start),
+            Point.points > 0
         ).scalar() or 0
         
         # 月間使用ポイント
-        used = db.query(func.sum(Point.amount)).filter(
-            Point.created_at.between(month_start, next_month_start),
-            Point.amount < 0
+        used = db.query(func.sum(Point.points)).filter(
+            Point.earned_at.between(month_start, next_month_start),
+            Point.points < 0
         ).scalar() or 0
         
         # アクティブユーザー数
         active_users = db.query(func.count(func.distinct(Point.user_id))).filter(
-            Point.created_at.between(month_start, next_month_start)
+            Point.earned_at.between(month_start, next_month_start)
         ).scalar() or 0
         
         result.append(MonthlyTrend(

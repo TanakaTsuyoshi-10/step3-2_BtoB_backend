@@ -1,9 +1,10 @@
 from typing import Any, List, Optional, Annotated
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, and_
+from sqlalchemy import desc, and_, func
+from pydantic import BaseModel
 
-from app.auth.deps import get_current_user
+from app.auth.deps import get_current_user, get_current_admin_user
 from app.db.database import get_db
 from app.models.user import User
 from app.models.reward import Reward
@@ -149,6 +150,53 @@ def get_my_redemptions(
             **redemption.__dict__,
             reward_title=reward.title if reward else "削除された景品",
             reward_category=reward.category if reward else "不明"
+        ))
+    
+    return result
+
+
+class RewardPopularity(BaseModel):
+    reward_id: int
+    reward_title: str
+    category: str
+    redemption_count: int
+    total_points_spent: int
+    avg_points_per_redemption: float
+
+
+@router.get("/admin/popularity", response_model=List[RewardPopularity])
+def get_reward_popularity(
+    current_admin: Annotated[User, Depends(get_current_admin_user)],
+    db: Annotated[Session, Depends(get_db)],
+    limit: int = Query(20, ge=1, le=100)
+) -> Any:
+    """景品の人気度（選択数）ランキングを取得（管理者用）"""
+    
+    # 交換実績のある景品の統計を取得
+    popularity_query = db.query(
+        Reward.id,
+        Reward.title,
+        Reward.category,
+        func.count(Redemption.id).label('redemption_count'),
+        func.sum(Redemption.points_spent).label('total_points_spent'),
+        func.avg(Redemption.points_spent).label('avg_points_per_redemption')
+    ).join(
+        Redemption, Reward.id == Redemption.reward_id
+    ).group_by(
+        Reward.id, Reward.title, Reward.category
+    ).order_by(
+        func.count(Redemption.id).desc()
+    ).limit(limit).all()
+    
+    result = []
+    for reward_data in popularity_query:
+        result.append(RewardPopularity(
+            reward_id=reward_data.id,
+            reward_title=reward_data.title,
+            category=reward_data.category,
+            redemption_count=reward_data.redemption_count,
+            total_points_spent=reward_data.total_points_spent or 0,
+            avg_points_per_redemption=round(reward_data.avg_points_per_redemption or 0, 2)
         ))
     
     return result

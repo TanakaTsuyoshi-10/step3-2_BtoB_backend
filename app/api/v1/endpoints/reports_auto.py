@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Response
 from typing import List, Optional
 from datetime import datetime, timedelta
 from pydantic import BaseModel
-from app.api.deps import get_current_admin_user
+from app.auth.deps import get_current_admin_user
 from app.db.database import get_db
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func
@@ -77,12 +77,12 @@ async def preview_report(
     co2_reduction = total_consumption * 0.34  # 仮の換算係数
     
     active_employees = db.query(func.count(func.distinct(Point.user_id))).filter(
-        Point.created_at.between(start_date, end_date)
+        Point.earned_at.between(start_date, end_date)
     ).scalar() or 0
     
-    total_points = db.query(func.sum(Point.amount)).filter(
-        Point.created_at.between(start_date, end_date),
-        Point.amount > 0
+    total_points = db.query(func.sum(Point.points)).filter(
+        Point.earned_at.between(start_date, end_date),
+        Point.points > 0
     ).scalar() or 0
     
     key_metrics = {
@@ -364,4 +364,69 @@ async def download_report(
         content=file_content,
         media_type=media_type,
         headers={"Content-Disposition": f"attachment; filename={file_name}"}
+    )
+
+
+class PeriodMetrics(BaseModel):
+    period_start: str
+    period_end: str
+    electricity_kwh: float
+    gas_m3: float
+    co2_reduction_kg: float
+    active_employees: int
+    total_employees: int
+    total_points: int
+
+
+@router.get("/auto", response_model=PeriodMetrics)
+async def get_period_metrics(
+    from_date: str = "2024-01-01",
+    to_date: str = "2024-12-31",
+    current_admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """期間集計（電気/ガス/CO2/従業員数）を返す"""
+    
+    start_date = datetime.fromisoformat(from_date)
+    end_date = datetime.fromisoformat(to_date)
+    
+    # 電気使用量の合計
+    electricity_total = db.query(func.sum(EnergyRecord.consumption)).filter(
+        EnergyRecord.recorded_at.between(start_date, end_date),
+        EnergyRecord.energy_type == "electricity"
+    ).scalar() or 0
+    
+    # ガス使用量の合計
+    gas_total = db.query(func.sum(EnergyRecord.consumption)).filter(
+        EnergyRecord.recorded_at.between(start_date, end_date),
+        EnergyRecord.energy_type == "gas"
+    ).scalar() or 0
+    
+    # CO2削減量（電気とガスの合計に換算係数を適用）
+    co2_reduction = (electricity_total + gas_total) * 0.34
+    
+    # アクティブ従業員数（期間中にポイント活動があった）
+    active_employees = db.query(func.count(func.distinct(Point.user_id))).filter(
+        Point.earned_at.between(start_date, end_date)
+    ).scalar() or 0
+    
+    # 総従業員数（従業員レコードがあるユーザー）
+    from app.models.employee import Employee
+    total_employees = db.query(func.count(Employee.id)).scalar() or 0
+    
+    # 総ポイント（期間中に獲得されたポイント）
+    total_points = db.query(func.sum(Point.points)).filter(
+        Point.earned_at.between(start_date, end_date),
+        Point.points > 0
+    ).scalar() or 0
+    
+    return PeriodMetrics(
+        period_start=from_date,
+        period_end=to_date,
+        electricity_kwh=round(electricity_total, 2),
+        gas_m3=round(gas_total, 2),
+        co2_reduction_kg=round(co2_reduction, 2),
+        active_employees=active_employees,
+        total_employees=total_employees,
+        total_points=total_points
     )
