@@ -17,6 +17,8 @@ class KPIResponse(BaseModel):
     electricity_total_kwh: float
     gas_total_m3: float
     co2_reduction_total_kg: float
+    total_redemptions: int = 0
+    total_points_spent: int = 0
 
 
 class MonthlyUsageItem(BaseModel):

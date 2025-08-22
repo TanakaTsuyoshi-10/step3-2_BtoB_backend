@@ -106,13 +106,34 @@ async def get_kpi_metrics(
     gas_total = float(usage_result[1] or 0)
     co2_total = float(usage_result[2] or 0)
     
+    # Redemption metrics
+    redemption_result = db.execute(text("""
+        SELECT 
+            COUNT(r.id) as total_redemptions,
+            SUM(r.points_spent) as total_points_spent
+        FROM redemptions r
+        JOIN employees e ON r.user_id = e.user_id
+        WHERE e.company_id = :company_id
+        AND DATE(r.created_at) BETWEEN :from_date AND :to_date
+        AND r.status = '承認'
+    """), {
+        "company_id": target_company_id,
+        "from_date": from_date,
+        "to_date": to_date
+    }).fetchone()
+    
+    total_redemptions = int(redemption_result[0] or 0)
+    total_points_spent = int(redemption_result[1] or 0)
+    
     return KPIResponse(
         company_id=target_company_id,
         range=DateRangeModel(from_date=from_date, to_date=to_date),
         active_users=active_users,
         electricity_total_kwh=electricity_total,
         gas_total_m3=gas_total,
-        co2_reduction_total_kg=co2_total
+        co2_reduction_total_kg=co2_total,
+        total_redemptions=total_redemptions,
+        total_points_spent=total_points_spent
     )
 
 
