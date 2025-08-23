@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     SQLALCHEMY_DATABASE_URI: Optional[str] = None
     
     # JWT
-    SECRET_KEY: str
+    SECRET_KEY: str = "fallback-secret-key-for-development-only-change-in-production"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
