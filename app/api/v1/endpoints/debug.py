@@ -1,51 +1,31 @@
-# app/api/v1/endpoints/debug.py
-import os
-from typing import Optional
-from urllib.parse import urlparse
-from fastapi import APIRouter, Header, HTTPException, Depends
-from sqlalchemy import text
-from app.db.database import SessionLocal, engine
+from fastapi import APIRouter, Depends
 from app.core.config import settings
+from app.schemas.user import User
+from app.auth.deps import get_current_user
+import os
 
-router = APIRouter(tags=["_debug"])
+router = APIRouter(tags=["debug"])
 
-def require_debug_token(x_debug_token: Optional[str] = Header(default=None)):
-    expected = os.getenv("DEBUG_TOKEN")
-    if not expected or x_debug_token != expected:
-        raise HTTPException(status_code=403, detail="forbidden")
-    return True
 
-@router.get("/_debug/outbound-ips")
-def outbound_ips(_: bool = Depends(require_debug_token)):
-    """Get Azure App Service outbound IPs for MySQL firewall configuration"""
-    ips = os.getenv("WEBSITE_OUTBOUND_IPS")
-    arr = ips.split(",") if ips else []
-    return {"WEBSITE_OUTBOUND_IPS": arr}
+@router.get("/debug/config")
+def debug_config():
+    """Debug endpoint to check configuration (development only)"""
+    return {
+        "secret_key_length": len(settings.SECRET_KEY),
+        "secret_key_first_10": settings.SECRET_KEY[:10],
+        "algorithm": settings.ALGORITHM,
+        "token_expire_minutes": settings.ACCESS_TOKEN_EXPIRE_MINUTES,
+        "project_name": settings.PROJECT_NAME,
+        "project_version": settings.PROJECT_VERSION
+    }
 
-@router.get("/_debug/effective-db-config")
-def effective_db_config(_: bool = Depends(require_debug_token)):
-    """Get effective database configuration (safe output)"""
-    try:
-        uri = settings.sqlalchemy_uri_clean
-        parsed = urlparse(uri)
-        
-        return {
-            "uri_source": "SQLALCHEMY_DATABASE_URI",
-            "driver": parsed.scheme,
-            "username": parsed.username,
-            "host": parsed.hostname,
-            "port": parsed.port,
-            "database": parsed.path.lstrip("/") if parsed.path else None
-        }
-    except Exception as e:
-        return {"error": str(e)[:400]}
 
-@router.get("/_debug/db-health")  
-def db_health(_: bool = Depends(require_debug_token)):
-    """Test database connectivity"""
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        return {"db_ok": True}
-    except Exception as e:
-        return {"db_ok": False, "error": str(e)[:400]}
+@router.get("/debug/env")
+def debug_env():
+    """Debug endpoint to check environment variables"""
+    secret_key_env = os.environ.get('SECRET_KEY')
+    return {
+        "secret_key_env_exists": secret_key_env is not None,
+        "secret_key_env_length": len(secret_key_env) if secret_key_env else 0,
+        "secret_key_env_first_10": secret_key_env[:10] if secret_key_env else None
+    }
