@@ -12,31 +12,13 @@ from app.schemas.metrics import (
     KPIResponse, MonthlyUsageResponse, Co2TrendResponse, YoyUsageResponse,
     DateRangeModel, MonthlyUsageItem, Co2TrendItem, UsageData
 )
+from app.api.v1.helpers import get_user_company_id
 
 router = APIRouter(tags=["metrics"])
 
 # CO2係数定数（日本国内の一般的係数）
 CO2_FACTOR_ELECTRICITY = 0.000518  # kg-CO2/kWh (2021年度全国平均)
 CO2_FACTOR_GAS = 0.0023  # kg-CO2/m3
-
-
-async def get_user_company_id(
-    db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)]
-) -> int:
-    """Get company_id for the current user"""
-    result = db.execute(
-        text("SELECT company_id FROM employees WHERE user_id = :user_id"),
-        {"user_id": current_user.id}
-    ).fetchone()
-    
-    if not result or result[0] is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="ユーザーは会社に所属していません"
-        )
-    
-    return result[0]
 
 
 @router.get("/kpi", response_model=KPIResponse)
