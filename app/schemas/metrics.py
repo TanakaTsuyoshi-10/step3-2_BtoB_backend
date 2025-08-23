@@ -19,6 +19,17 @@ class KPIResponse(BaseModel):
     co2_reduction_total_kg: float
     total_redemptions: int = 0
     total_points_spent: int = 0
+    total_energy_saved: float = 0.0
+    total_points_awarded: int = 0
+    
+    # Aliases for frontend compatibility
+    @property
+    def total_users(self) -> int:
+        return self.active_users
+    
+    @property
+    def total_co2_reduced(self) -> float:
+        return self.co2_reduction_total_kg
 
 
 class MonthlyUsageItem(BaseModel):
