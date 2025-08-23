@@ -1,9 +1,11 @@
 # app/api/v1/endpoints/debug.py
 import os
 from typing import Optional
+from urllib.parse import urlparse
 from fastapi import APIRouter, Header, HTTPException, Depends
 from sqlalchemy import text
-from app.db.database import SessionLocal
+from app.db.database import SessionLocal, engine
+from app.core.config import settings
 
 router = APIRouter(tags=["_debug"])
 
@@ -20,12 +22,30 @@ def outbound_ips(_: bool = Depends(require_debug_token)):
     arr = ips.split(",") if ips else []
     return {"WEBSITE_OUTBOUND_IPS": arr}
 
+@router.get("/_debug/effective-db-config")
+def effective_db_config(_: bool = Depends(require_debug_token)):
+    """Get effective database configuration (safe output)"""
+    try:
+        uri = settings.sqlalchemy_uri_clean
+        parsed = urlparse(uri)
+        
+        return {
+            "uri_source": "SQLALCHEMY_DATABASE_URI",
+            "driver": parsed.scheme,
+            "username": parsed.username,
+            "host": parsed.hostname,
+            "port": parsed.port,
+            "database": parsed.path.lstrip("/") if parsed.path else None
+        }
+    except Exception as e:
+        return {"error": str(e)[:400]}
+
 @router.get("/_debug/db-health")  
 def db_health(_: bool = Depends(require_debug_token)):
     """Test database connectivity"""
     try:
-        with SessionLocal() as db:
-            db.execute(text("SELECT 1"))
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
         return {"db_ok": True}
     except Exception as e:
         return {"db_ok": False, "error": str(e)[:400]}

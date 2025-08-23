@@ -3,29 +3,20 @@ from pydantic import field_validator, ConfigDict
 from typing import Optional, List, Union
 import json
 import os
-from urllib.parse import quote_plus
 
 
 class Settings(BaseSettings):
     model_config = ConfigDict(
         env_file=".env",
         case_sensitive=True,
-        extra="ignore"  # Allow extra fields without validation error
+        extra="ignore"
     )
     
     PROJECT_NAME: str = "Energy Management System"
     PROJECT_VERSION: str = "1.0.0"
     
-    # Database - Legacy support
-    DATABASE_URL: Optional[str] = None
-    
-    # MySQL - Individual components for Azure MySQL
-    MYSQL_HOST: Optional[str] = None
-    MYSQL_PORT: int = 3306
-    MYSQL_USER: Optional[str] = None
-    MYSQL_PASSWORD: Optional[str] = None
-    MYSQL_DATABASE: Optional[str] = None
-    MYSQL_SSL_CA: Optional[str] = None
+    # Database - Single source of truth
+    SQLALCHEMY_DATABASE_URI: str
     
     # JWT
     SECRET_KEY: str
@@ -37,14 +28,13 @@ class Settings(BaseSettings):
     AZURE_CLIENT_SECRET: Optional[str] = None
     AZURE_TENANT_ID: Optional[str] = None
     
-    # CORS - Support both ALLOWED_ORIGINS and BACKEND_CORS_ORIGINS
+    # CORS
     ALLOWED_ORIGINS: List[str] = [
         "http://localhost:3000", 
         "http://localhost:3001",
         "https://localhost:3000",
         "https://localhost:3001", 
-        "https://app-002-gen10-step3-2-node-oshima2.azurewebsites.net",
-        "https://<your-mobile-app-service-name>.azurewebsites.net"
+        "https://app-002-gen10-step3-2-node-oshima2.azurewebsites.net"
     ]
     BACKEND_CORS_ORIGINS: Optional[Union[str, List[str]]] = None
     
@@ -60,11 +50,9 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             if v.startswith('[') and v.endswith(']'):
                 try:
-                    # Try to parse as JSON array
                     return json.loads(v)
                 except json.JSONDecodeError:
                     pass
-            # Try comma-separated values
             return [origin.strip().strip('"\'') for origin in v.split(',') if origin.strip()]
         return v
     
@@ -74,26 +62,12 @@ class Settings(BaseSettings):
             return self.BACKEND_CORS_ORIGINS if isinstance(self.BACKEND_CORS_ORIGINS, list) else [self.BACKEND_CORS_ORIGINS]
         return self.ALLOWED_ORIGINS
     
-    def get_database_url(self) -> str:
-        """Build MySQL connection URL from individual components or use DATABASE_URL"""
-        # If DATABASE_URL is set, use it (legacy support)
-        if self.DATABASE_URL:
-            return self.DATABASE_URL
-        
-        # Build from individual MySQL components
-        if not all([self.MYSQL_HOST, self.MYSQL_USER, self.MYSQL_PASSWORD, self.MYSQL_DATABASE]):
-            raise ValueError(
-                "Either DATABASE_URL or all MySQL components (MYSQL_HOST, MYSQL_USER, "
-                "MYSQL_PASSWORD, MYSQL_DATABASE) must be provided"
-            )
-        
-        # URL encode password to handle special characters
-        encoded_password = quote_plus(self.MYSQL_PASSWORD)
-        
-        # Build base URL without SSL parameters (SSL handled via connect_args)
-        db_url = f"mysql+pymysql://{self.MYSQL_USER}:{encoded_password}@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{self.MYSQL_DATABASE}"
-        
-        return db_url
+    @property
+    def sqlalchemy_uri_clean(self) -> str:
+        uri = (self.SQLALCHEMY_DATABASE_URI or "").strip()
+        if not uri:
+            raise ValueError("SQLALCHEMY_DATABASE_URI is required")
+        return uri
 
 
 settings = Settings()

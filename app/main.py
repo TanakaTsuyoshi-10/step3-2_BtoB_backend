@@ -14,7 +14,7 @@ async def lifespan(app):
     print("アプリケーション起動中...")
     
     # Log database connection info (host only, no credentials)
-    database_url = settings.get_database_url()
+    database_url = settings.sqlalchemy_uri_clean
     if "@" in database_url and ":" in database_url:
         # Extract host from URL (format: mysql+pymysql://user:pass@host:port/db)
         host_part = database_url.split("@")[1].split("/")[0].split(":")[0]
