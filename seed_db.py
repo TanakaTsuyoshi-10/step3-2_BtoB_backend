@@ -22,9 +22,10 @@ try:
     from mysql.connector import Error
     from dotenv import load_dotenv
     from tqdm import tqdm
+    import bcrypt
 except ImportError as e:
     print(f"必要なライブラリがインストールされていません: {e}")
-    print("pip install -r requirements.txt を実行してください")
+    print("pip install python-dotenv mysql-connector-python tqdm bcrypt を実行してください")
     sys.exit(1)
 
 # ログ設定
@@ -278,293 +279,257 @@ class DatabaseSeeder:
             cursor.close()
 
     def generate_users_employees(self):
-        """ユーザー・従業員データ生成"""
+        """ユーザー・従業員データ生成（スキーマ準拠）"""
         logger.info(f"ユーザー・従業員データ生成開始: {self.employees_count}件")
         
         company_count = self.ensure_companies()
-        users_data = []
-        employees_data = []
         
-        # 作成日の分散
-        start_date = datetime.now() - timedelta(days=365*2)
-        
-        for i in range(1, self.employees_count + 1):
-            # アクティブ判定
-            is_active = i <= self.active_employees
+        cursor = self.connection.cursor()
+        try:
+            # フェーズ1: Users 生成
+            logger.info("フェーズ1: Users テーブル投入")
+            users_sql = """
+                INSERT INTO users (email, hashed_password, full_name, is_active, is_superuser, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE 
+                    hashed_password=VALUES(hashed_password),
+                    full_name=VALUES(full_name),
+                    is_active=VALUES(is_active)
+            """
             
-            # 作成日（アクティブユーザーは古いユーザーほど多い）
-            if is_active:
-                days_offset = random.randint(30, 730)  # 1ヶ月〜2年前
-            else:
-                days_offset = random.randint(0, 90)   # 最近作成が多い
+            users_data = []
+            start_date = datetime.now() - timedelta(days=365*2)
+            
+            for i in range(1, self.employees_count + 1):
+                is_active = i <= self.active_employees
+                days_offset = random.randint(30, 730) if is_active else random.randint(0, 90)
+                created_at = start_date + timedelta(days=days_offset)
                 
-            created_at = start_date + timedelta(days=days_offset)
+                # パスワードハッシュ生成
+                plain_password = f"password{i:06d}"
+                hashed_password = bcrypt.hashpw(plain_password.encode(), bcrypt.gensalt()).decode()
+                
+                users_data.append((
+                    f'user{i:06d}@example.com',       # email
+                    hashed_password,                   # hashed_password
+                    f'田中 太郎{i:04d}',               # full_name
+                    is_active,                         # is_active
+                    False,                            # is_superuser
+                    created_at                        # created_at
+                ))
             
-            # ユーザーデータ
-            user_data = {
-                'email': f'user{i:06d}@example.com',
-                'password_hash': 'dummy_hash_' + str(i),
-                'first_name': f'太郎{i:04d}',
-                'last_name': f'田中',
-                'is_active': is_active,
-                'created_at': created_at,
-                'updated_at': created_at
-            }
+            # バッチ挿入
+            batch_size = 1000
+            for i in tqdm(range(0, len(users_data), batch_size), desc="Inserting users"):
+                batch = users_data[i:i + batch_size]
+                cursor.executemany(users_sql, batch)
+                if i % (batch_size * 5) == 0:
+                    self.connection.commit()
             
-            # 従業員データ
-            employee_data = {
-                'user_id': i,  # auto_incrementを仮定
-                'company_id': random.randint(1, company_count),
-                'employee_id': f'EMP{i:06d}',
-                'department': random.choice(['営業部', '開発部', '管理部', '人事部', '経理部']),
-                'position': random.choice(['一般', '主任', '係長', '課長', '部長']),
-                'created_at': created_at,
-                'updated_at': created_at
-            }
+            self.connection.commit()
+            self.stats['users'] = len(users_data)
+            logger.info(f"Users 投入完了: {len(users_data)}件")
             
-            users_data.append(user_data)
-            employees_data.append(employee_data)
-        
-        # バルクINSERT
-        self.stats['users'] = self.bulk_insert('users', users_data)
-        self.stats['employees'] = self.bulk_insert('employees', employees_data)
+            # フェーズ2: Employees 生成（user_idを取得して整合性確保）
+            logger.info("フェーズ2: Employees テーブル投入")
+            
+            # 挿入されたuser_idを取得
+            cursor.execute("SELECT id, email FROM users ORDER BY id")
+            user_mappings = cursor.fetchall()
+            
+            employees_sql = """
+                INSERT INTO employees (user_id, company_id, department, employee_code, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    company_id=VALUES(company_id),
+                    department=VALUES(department)
+            """
+            
+            employees_data = []
+            for idx, (user_id, email) in enumerate(user_mappings[:self.employees_count]):
+                created_at = start_date + timedelta(days=random.randint(30, 730))
+                
+                employees_data.append((
+                    user_id,                                        # user_id (FK)
+                    random.randint(1, company_count),              # company_id
+                    random.choice(['営業部', '開発部', '管理部', '人事部', '経理部']),  # department
+                    f'EMP{user_id:06d}',                           # employee_code (UNIQUE)
+                    created_at                                     # created_at
+                ))
+            
+            # バッチ挿入
+            for i in tqdm(range(0, len(employees_data), batch_size), desc="Inserting employees"):
+                batch = employees_data[i:i + batch_size]
+                cursor.executemany(employees_sql, batch)
+                if i % (batch_size * 5) == 0:
+                    self.connection.commit()
+            
+            self.connection.commit()
+            self.stats['employees'] = len(employees_data)
+            logger.info(f"Employees 投入完了: {len(employees_data)}件")
+            
+        except Error as e:
+            logger.error(f"ユーザー・従業員生成失敗: {e}")
+            self.connection.rollback()
+            raise
+        finally:
+            cursor.close()
 
     def generate_energy_records(self):
-        """エネルギー使用記録生成"""
+        """エネルギー使用記録生成（IoTデバイススキーマ準拠）"""
         logger.info(f"エネルギー記録生成開始: {self.active_employees}人 × {self.months_back}ヶ月")
         
-        energy_data = []
-        base_date = datetime.now().replace(day=1)
-        
-        # 電気・ガス単価
-        electricity_rate = 30  # 円/kWh
-        gas_rate = 160        # 円/m³
-        
-        for user_id in range(1, self.active_employees + 1):
-            # 個人の基本使用量（正規分布）
-            base_electricity = max(200, random.gauss(450, 100))  # kWh
-            base_gas = max(10, random.gauss(35, 8))              # m³
+        # アクティブユーザーIDを取得
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute("SELECT id FROM users WHERE is_active = 1 ORDER BY id")
+            active_user_ids = [row[0] for row in cursor.fetchall()]
             
-            for month_offset in range(self.months_back):
-                target_date = base_date - timedelta(days=30 * month_offset)
-                month = target_date.month
-                year = target_date.year
+            if not active_user_ids:
+                logger.warning("アクティブユーザーが見つかりません。エネルギー記録をスキップ")
+                return
                 
-                # 季節性適用
-                seasonal_factor = self.seasonal_factors[month]
-                noise = random.gauss(1.0, 0.1)  # ±10%ノイズ
+            logger.info(f"フェーズ3: Energy Records テーブル投入（{len(active_user_ids)}名）")
+            
+            energy_sql = """
+                INSERT INTO energy_records (`timestamp`, user_id, energy_consumed, energy_produced, 
+                                          grid_import, grid_export, power, temperature, efficiency, status, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    energy_consumed=VALUES(energy_consumed),
+                    power=VALUES(power)
+            """
+            
+            energy_data = []
+            base_date = datetime.now().replace(day=1, hour=12, minute=0, second=0, microsecond=0)
+            
+            for user_id in active_user_ids[:self.active_employees]:
+                # 個人の基本消費量パターン
+                base_consumption = max(5.0, random.gauss(15.0, 3.0))  # kW平均
+                base_production = max(0.0, random.gauss(2.0, 1.0))    # 太陽光等
                 
-                # 電気記録
-                electricity_usage = base_electricity * seasonal_factor * noise
-                electricity_cost = electricity_usage * electricity_rate
-                
-                energy_data.append({
-                    'user_id': user_id,
-                    'type': 'electricity',
-                    'year': year,
-                    'month': month,
-                    'usage_value': round(electricity_usage, 2),
-                    'unit': 'kWh',
-                    'cost_yen': round(electricity_cost),
-                    'created_at': target_date
-                })
-                
-                # ガス記録（70%の確率）
-                if random.random() < 0.7:
-                    gas_usage = base_gas * seasonal_factor * noise
-                    gas_cost = gas_usage * gas_rate
+                for month_offset in range(self.months_back):
+                    # 月次の代表的なタイムスタンプを生成（月初）
+                    target_datetime = base_date - timedelta(days=30 * month_offset)
+                    month = target_datetime.month
                     
-                    energy_data.append({
-                        'user_id': user_id,
-                        'type': 'gas',
-                        'year': year,
-                        'month': month,
-                        'usage_value': round(gas_usage, 2),
-                        'unit': 'm³',
-                        'cost_yen': round(gas_cost),
-                        'created_at': target_date
-                    })
-        
-        self.stats['energy_records'] = self.bulk_insert('energy_records', energy_data)
+                    # 季節性適用
+                    seasonal_factor = self.seasonal_factors[month]
+                    noise = random.gauss(1.0, 0.1)
+                    
+                    # IoT想定の値を生成
+                    consumed = round(base_consumption * seasonal_factor * noise, 2)
+                    produced = round(base_production * seasonal_factor * noise * 0.7, 2)  # 日照条件
+                    grid_import = round(max(0, consumed - produced), 2)
+                    grid_export = round(max(0, produced - consumed) * 0.8, 2)  # 売電効率
+                    power = round(consumed * 1000, 1)  # W単位
+                    temp = round(20 + 15 * math.sin((month - 1) * math.pi / 6), 1)  # 気温概算
+                    efficiency = round(85 + random.gauss(0, 5), 1)  # 効率%
+                    
+                    energy_data.append((
+                        target_datetime,          # timestamp (NOT NULL)
+                        user_id,                  # user_id
+                        consumed,                 # energy_consumed
+                        produced,                 # energy_produced
+                        grid_import,              # grid_import
+                        grid_export,              # grid_export
+                        power,                    # power
+                        temp,                     # temperature
+                        efficiency,               # efficiency
+                        'normal',                 # status
+                        target_datetime           # created_at
+                    ))
+            
+            # バッチ挿入
+            batch_size = 1000
+            for i in tqdm(range(0, len(energy_data), batch_size), desc="Inserting energy records"):
+                batch = energy_data[i:i + batch_size]
+                cursor.executemany(energy_sql, batch)
+                if i % (batch_size * 5) == 0:
+                    self.connection.commit()
+            
+            self.connection.commit()
+            self.stats['energy_records'] = len(energy_data)
+            logger.info(f"Energy Records 投入完了: {len(energy_data)}件")
+            
+        except Error as e:
+            logger.error(f"エネルギー記録生成失敗: {e}")
+            self.connection.rollback()
+            raise
+        finally:
+            cursor.close()
 
     def generate_rewards(self):
-        """景品データ生成"""
-        logger.info("景品データ生成開始")
+        """景品データ生成（スキーマ準拠）"""
+        logger.info("フェーズ4: Rewards テーブル投入")
         
-        rewards_data = [
-            {'name': 'Amazonギフト券 500円', 'category': 'ギフトカード', 'points_required': 500, 'stock': 10000, 'description': 'Amazon.co.jpで使える500円分のギフト券'},
-            {'name': 'Amazonギフト券 1000円', 'category': 'ギフトカード', 'points_required': 1000, 'stock': 5000, 'description': 'Amazon.co.jpで使える1000円分のギフト券'},
-            {'name': 'スターバックスカード 500円', 'category': 'ギフトカード', 'points_required': 550, 'stock': 3000, 'description': 'スターバックスで使える500円分のプリペイドカード'},
-            {'name': '図書カード 1000円', 'category': 'ギフトカード', 'points_required': 1100, 'stock': 2000, 'description': '全国の書店で使える1000円分の図書カード'},
-            {'name': 'QUOカード 500円', 'category': 'ギフトカード', 'points_required': 550, 'stock': 8000, 'description': 'コンビニ等で使える500円分のQUOカード'},
-            {'name': 'コーヒー豆（200g）', 'category': '食品・飲料', 'points_required': 400, 'stock': 1500, 'description': 'オーガニックコーヒー豆200g'},
-            {'name': '緑茶ティーバッグセット', 'category': '食品・飲料', 'points_required': 300, 'stock': 2000, 'description': '静岡県産緑茶ティーバッグ50個入り'},
-            {'name': 'エコバッグ', 'category': '生活用品', 'points_required': 200, 'stock': 5000, 'description': '折りたたみ可能なオーガニックコットンエコバッグ'},
-            {'name': 'マイボトル（500ml）', 'category': '生活用品', 'points_required': 600, 'stock': 1000, 'description': '保温保冷機能付きステンレスボトル'},
-            {'name': 'LED電球（60W相当）', 'category': '生活用品', 'points_required': 250, 'stock': 3000, 'description': '省エネLED電球 昼白色'},
-            {'name': 'ワイヤレスマウス', 'category': '電子機器', 'points_required': 800, 'stock': 500, 'description': 'エルゴノミクスワイヤレスマウス'},
-            {'name': 'モバイルバッテリー', 'category': '電子機器', 'points_required': 1200, 'stock': 800, 'description': '10000mAh大容量モバイルバッテリー'},
-            {'name': 'Netflix ギフト券 1ヶ月', 'category': 'エンターテイメント', 'points_required': 900, 'stock': 2000, 'description': 'Netflix 1ヶ月間視聴ギフトコード'},
-            {'name': '映画鑑賞券', 'category': 'エンターテイメント', 'points_required': 1500, 'stock': 1000, 'description': '全国の映画館で使える映画鑑賞券'},
-            {'name': '植物栽培キット', 'category': 'その他', 'points_required': 450, 'stock': 1200, 'description': 'ハーブ栽培キット（バジル・パセリ）'},
-        ]
-        
-        # created_at, updated_atを追加
-        current_time = datetime.now()
-        for reward in rewards_data:
-            reward['created_at'] = current_time
-            reward['updated_at'] = current_time
-            reward['active'] = True
-        
-        self.stats['rewards'] = self.bulk_insert('rewards', rewards_data)
+        cursor = self.connection.cursor()
+        try:
+            rewards_sql = """
+                INSERT INTO rewards (title, description, category, stock, points_required, active, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    stock=VALUES(stock),
+                    points_required=VALUES(points_required),
+                    active=VALUES(active)
+            """
+            
+            current_time = datetime.now()
+            rewards_data = [
+                ('Amazonギフト券 500円', 'Amazon.co.jpで使える500円分のギフト券', 'ギフトカード', 10000, 500, True, current_time),
+                ('Amazonギフト券 1000円', 'Amazon.co.jpで使える1000円分のギフト券', 'ギフトカード', 5000, 1000, True, current_time),
+                ('スターバックスカード 500円', 'スターバックスで使える500円分のプリペイドカード', 'ギフトカード', 3000, 550, True, current_time),
+                ('図書カード 1000円', '全国の書店で使える1000円分の図書カード', 'ギフトカード', 2000, 1100, True, current_time),
+                ('QUOカード 500円', 'コンビニ等で使える500円分のQUOカード', 'ギフトカード', 8000, 550, True, current_time),
+                ('コーヒー豆（200g）', 'オーガニックコーヒー豆200g', '食品・飲料', 1500, 400, True, current_time),
+                ('緑茶ティーバッグセット', '静岡県産緑茶ティーバッグ50個入り', '食品・飲料', 2000, 300, True, current_time),
+                ('エコバッグ', '折りたたみ可能なオーガニックコットンエコバッグ', '生活用品', 5000, 200, True, current_time),
+                ('マイボトル（500ml）', '保温保冷機能付きステンレスボトル', '生活用品', 1000, 600, True, current_time),
+                ('LED電球（60W相当）', '省エネLED電球 昼白色', '生活用品', 3000, 250, True, current_time),
+                ('ワイヤレスマウス', 'エルゴノミクスワイヤレスマウス', '電子機器', 500, 800, True, current_time),
+                ('モバイルバッテリー', '10000mAh大容量モバイルバッテリー', '電子機器', 800, 1200, True, current_time),
+                ('Netflix ギフト券 1ヶ月', 'Netflix 1ヶ月間視聴ギフトコード', 'エンターテイメント', 2000, 900, True, current_time),
+                ('映画鑑賞券', '全国の映画館で使える映画鑑賞券', 'エンターテイメント', 1000, 1500, True, current_time),
+                ('植物栽培キット', 'ハーブ栽培キット（バジル・パセリ）', 'その他', 1200, 450, True, current_time),
+            ]
+            
+            cursor.executemany(rewards_sql, rewards_data)
+            self.connection.commit()
+            self.stats['rewards'] = len(rewards_data)
+            logger.info(f"Rewards 投入完了: {len(rewards_data)}件")
+            
+        except Error as e:
+            logger.error(f"景品データ生成失敗: {e}")
+            self.connection.rollback()
+            raise
+        finally:
+            cursor.close()
 
     def generate_points_and_redemptions(self):
         """ポイント・交換履歴生成（整合性保証）"""
-        logger.info("ポイント・交換履歴生成開始")
+        logger.info("フェーズ5: Points & Redemptions テーブル投入（スキップ）")
         
-        # 報酬一覧取得
-        cursor = self.connection.cursor(dictionary=True)
-        cursor.execute(f"SELECT id, points_required, stock FROM {self.config['database']}.rewards")
-        rewards = cursor.fetchall()
-        cursor.close()
-        
-        if not rewards:
-            logger.error("報酬データが見つかりません。generate_rewards()を先に実行してください。")
-            return
-        
-        points_ledger_data = []
-        redemptions_data = []
-        reward_stock_updates = {r['id']: r['stock'] for r in rewards}
-        
-        # アクティブユーザーの70%がポイント活動
-        point_active_users = int(self.active_employees * 0.7)
-        
-        for user_id in range(1, point_active_users + 1):
-            user_balance = 0
-            
-            # ポイント獲得イベント（月1-3回、過去2年）
-            for month_offset in range(self.months_back):
-                events_this_month = random.randint(1, 3)
-                
-                for _ in range(events_this_month):
-                    # 獲得ポイント（ログイン、省エネ活動等）
-                    points_earned = random.choice([10, 20, 30, 50, 100, 150])
-                    event_date = datetime.now() - timedelta(days=30*month_offset + random.randint(0, 29))
-                    
-                    points_ledger_data.append({
-                        'user_id': user_id,
-                        'delta': points_earned,
-                        'type': 'earn',
-                        'reason': random.choice([
-                            '月次ログイン',
-                            '省エネ目標達成',
-                            'データアップロード',
-                            'エアコン温度最適化',
-                            'LED化推進',
-                            '研修受講完了'
-                        ]),
-                        'created_at': event_date
-                    })
-                    user_balance += points_earned
-            
-            # 交換イベント（30%のユーザーが年1-2回）
-            if random.random() < 0.3:
-                redemption_count = random.randint(1, 2)
-                
-                for _ in range(redemption_count):
-                    # 交換可能な報酬から選択
-                    affordable_rewards = [r for r in rewards 
-                                        if r['points_required'] <= user_balance 
-                                        and reward_stock_updates[r['id']] > 0]
-                    
-                    if affordable_rewards:
-                        reward = random.choice(affordable_rewards)
-                        redemption_date = datetime.now() - timedelta(days=random.randint(0, 365))
-                        
-                        # 在庫減少
-                        reward_stock_updates[reward['id']] -= 1
-                        user_balance -= reward['points_required']
-                        
-                        # ポイント消費記録
-                        points_ledger_data.append({
-                            'user_id': user_id,
-                            'delta': -reward['points_required'],
-                            'type': 'spend',
-                            'reason': f"{reward['id']}番商品と交換",
-                            'created_at': redemption_date
-                        })
-                        
-                        # 交換記録
-                        redemptions_data.append({
-                            'user_id': user_id,
-                            'reward_id': reward['id'],
-                            'points_used': reward['points_required'],
-                            'status': 'completed',
-                            'created_at': redemption_date
-                        })
-        
-        # トランザクション開始
+        # 既存のポイントシステムテーブルが存在するかチェック
+        cursor = self.connection.cursor()
         try:
-            self.connection.start_transaction()
-            
-            # ポイント履歴
-            self.stats['points_ledger'] = self.bulk_insert('points_ledger', points_ledger_data)
-            
-            # 交換履歴  
-            self.stats['redemptions'] = self.bulk_insert('redemptions', redemptions_data)
-            
-            # 報酬在庫更新
-            cursor = self.connection.cursor()
-            for reward_id, new_stock in reward_stock_updates.items():
-                cursor.execute(
-                    f"UPDATE {self.config['database']}.rewards SET stock = %s WHERE id = %s",
-                    (new_stock, reward_id)
-                )
-            cursor.close()
-            
-            self.connection.commit()
-            logger.info("ポイント・交換データ生成完了（整合性保証）")
-            
+            cursor.execute("SHOW TABLES LIKE 'points_ledger'")
+            if cursor.fetchone():
+                logger.info("Points/Redemptions システムは既存テーブルを使用")
+                logger.info("必要に応じて app/seeds/ の専用スクリプトを実行してください")
+                self.stats['points_ledger'] = 0
+                self.stats['redemptions'] = 0
+            else:
+                logger.warning("Points/Redemptions テーブルが見つかりません（スキップ）")
+                
         except Error as e:
-            logger.error(f"ポイント・交換データ生成失敗: {e}")
-            self.connection.rollback()
-            raise
+            logger.warning(f"ポイントテーブルチェック失敗: {e}")
+        finally:
+            cursor.close()
 
     def generate_current_points(self):
         """現在ポイント残高テーブル更新"""
-        logger.info("現在ポイント残高計算中...")
-        
-        try:
-            cursor = self.connection.cursor()
-            
-            # points_ledgerから残高集計してpointsテーブルにUPSERT
-            sql = f"""
-                INSERT INTO {self.config['database']}.points (user_id, current_balance, total_earned, total_spent, updated_at)
-                SELECT 
-                    user_id,
-                    SUM(delta) as current_balance,
-                    SUM(CASE WHEN delta > 0 THEN delta ELSE 0 END) as total_earned,
-                    SUM(CASE WHEN delta < 0 THEN ABS(delta) ELSE 0 END) as total_spent,
-                    NOW() as updated_at
-                FROM {self.config['database']}.points_ledger 
-                GROUP BY user_id
-                ON DUPLICATE KEY UPDATE
-                    current_balance = VALUES(current_balance),
-                    total_earned = VALUES(total_earned),  
-                    total_spent = VALUES(total_spent),
-                    updated_at = VALUES(updated_at)
-            """
-            
-            cursor.execute(sql)
-            points_count = cursor.rowcount
-            self.connection.commit()
-            cursor.close()
-            
-            logger.info(f"ポイント残高更新: {points_count}件")
-            
-        except Error as e:
-            logger.error(f"ポイント残高計算失敗: {e}")
-            self.connection.rollback()
+        logger.info("フェーズ6: Points 残高集計（スキップ）")
+        logger.info("ポイントシステムは app/seeds/ で管理されます")
 
     def run_seed(self):
         """シード実行"""

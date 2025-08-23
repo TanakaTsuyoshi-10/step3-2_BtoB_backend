@@ -1,0 +1,131 @@
+Table: users
+CREATE TABLE `users` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `email` varchar(255) NOT NULL,
+  `hashed_password` varchar(255) NOT NULL,
+  `full_name` varchar(255) DEFAULT NULL,
+  `is_active` tinyint(1) DEFAULT NULL,
+  `is_superuser` tinyint(1) DEFAULT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `ix_users_email` (`email`),
+  KEY `ix_users_id` (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=374 DEFAULT CHARSET=utf8mb3
+
+Columns for users:
+  id: int NOT NULL KEY: PRI 
+  email: varchar(255) NOT NULL KEY: UNI 
+  hashed_password: varchar(255) NOT NULL  
+  full_name: varchar(255) NULL  
+  is_active: tinyint(1) NULL  
+  is_superuser: tinyint(1) NULL  
+  created_at: datetime NULL  DEFAULT: CURRENT_TIMESTAMP
+  updated_at: datetime NULL  
+
+==================================================
+
+Table: employees
+CREATE TABLE `employees` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `user_id` int NOT NULL,
+  `company_id` int DEFAULT NULL,
+  `department` varchar(100) DEFAULT NULL,
+  `employee_code` varchar(50) DEFAULT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `ix_employees_user_id` (`user_id`),
+  UNIQUE KEY `ix_employees_employee_code` (`employee_code`),
+  KEY `ix_employees_id` (`id`),
+  CONSTRAINT `employees_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=461 DEFAULT CHARSET=utf8mb3
+
+Columns for employees:
+  id: int NOT NULL KEY: PRI 
+  user_id: int NOT NULL KEY: UNI 
+  company_id: int NULL  
+  department: varchar(100) NULL  
+  employee_code: varchar(50) NULL KEY: UNI 
+  created_at: datetime NULL  DEFAULT: CURRENT_TIMESTAMP
+  updated_at: datetime NULL  
+
+==================================================
+
+Table: energy_records
+CREATE TABLE `energy_records` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `timestamp` datetime NOT NULL,
+  `energy_produced` float DEFAULT NULL,
+  `energy_consumed` float DEFAULT NULL,
+  `energy_stored` float DEFAULT NULL,
+  `grid_import` float DEFAULT NULL,
+  `grid_export` float DEFAULT NULL,
+  `voltage` float DEFAULT NULL,
+  `current` float DEFAULT NULL,
+  `power` float DEFAULT NULL,
+  `temperature` float DEFAULT NULL,
+  `efficiency` float DEFAULT NULL,
+  `status` varchar(50) DEFAULT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `device_id` int DEFAULT NULL,
+  `user_id` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `device_id` (`device_id`),
+  KEY `user_id` (`user_id`),
+  KEY `ix_energy_records_id` (`id`),
+  CONSTRAINT `energy_records_ibfk_1` FOREIGN KEY (`device_id`) REFERENCES `devices` (`id`),
+  CONSTRAINT `energy_records_ibfk_2` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=32 DEFAULT CHARSET=utf8mb3
+
+Columns for energy_records:
+  id: int NOT NULL KEY: PRI 
+  timestamp: datetime NOT NULL  
+  energy_produced: float NULL  
+  energy_consumed: float NULL  
+  energy_stored: float NULL  
+  grid_import: float NULL  
+  grid_export: float NULL  
+  voltage: float NULL  
+  current: float NULL  
+  power: float NULL  
+  temperature: float NULL  
+  efficiency: float NULL  
+  status: varchar(50) NULL  
+  created_at: datetime NULL  DEFAULT: CURRENT_TIMESTAMP
+  device_id: int NULL KEY: MUL 
+  user_id: int NULL KEY: MUL 
+
+==================================================
+
+Table: rewards
+CREATE TABLE `rewards` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `title` varchar(200) NOT NULL,
+  `description` text,
+  `category` varchar(50) NOT NULL,
+  `image_url` varchar(500) DEFAULT NULL,
+  `stock` int NOT NULL,
+  `points_required` int NOT NULL,
+  `active` tinyint(1) NOT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `ix_rewards_id` (`id`),
+  KEY `ix_rewards_category` (`category`)
+) ENGINE=InnoDB AUTO_INCREMENT=15 DEFAULT CHARSET=utf8mb3
+
+Columns for rewards:
+  id: int NOT NULL KEY: PRI 
+  title: varchar(200) NOT NULL  
+  description: text NULL  
+  category: varchar(50) NOT NULL KEY: MUL 
+  image_url: varchar(500) NULL  
+  stock: int NOT NULL  
+  points_required: int NOT NULL  
+  active: tinyint(1) NOT NULL  
+  created_at: datetime NULL  DEFAULT: CURRENT_TIMESTAMP
+  updated_at: datetime NULL  
+
+==================================================
+
