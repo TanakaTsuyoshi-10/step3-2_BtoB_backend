@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     PROJECT_VERSION: str = "1.0.0"
     
     # Database - Single source of truth
-    SQLALCHEMY_DATABASE_URI: str
+    SQLALCHEMY_DATABASE_URI: Optional[str] = None
     
     # JWT
     SECRET_KEY: str
