@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import login, users, devices, energy_records, reports, points, rewards, admin, metrics, incentives, auto_report, admin_points, admin_incentives, reports_auto, mobile
+from app.api.v1.endpoints import login, users, devices, energy_records, reports, points, rewards, admin, metrics, incentives, auto_report, admin_points, admin_incentives, reports_auto, mobile, debug
 
 api_router = APIRouter()
 api_router.include_router(login.router, tags=["login"])
@@ -22,3 +22,6 @@ api_router.include_router(mobile.router, prefix="/mobile", tags=["mobile"])
 api_router.include_router(admin_points.router, prefix="/admin/points", tags=["admin-points"])
 api_router.include_router(admin_incentives.router, prefix="/admin/incentives", tags=["admin-incentives"])
 api_router.include_router(reports_auto.router, prefix="/reports", tags=["reports-auto"])
+
+# Debug APIs
+api_router.include_router(debug.router, prefix="/admin", tags=["debug"])

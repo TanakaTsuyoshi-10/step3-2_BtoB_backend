@@ -7,45 +7,52 @@ import os
 # Get database URL (either from DATABASE_URL or built from MySQL components)
 database_url = settings.get_database_url()
 
-# Build connect_args with SSL configuration for SQLAlchemy
-connect_args = {
-    "charset": "utf8mb4",
-    "connect_timeout": 60,
-    "read_timeout": 30,
-    "write_timeout": 30,
-}
+# Driver-specific connect_args for robust Azure MySQL connection
+connect_args = {}
+if database_url.startswith("mysql+pymysql://"):
+    # PyMySQL - recommended for Azure
+    connect_args = {
+        "charset": "utf8mb4",
+        "connect_timeout": 8,  # Shorter timeout for faster failure detection
+        "ssl": {"ssl_mode": "REQUIRED"}  # Azure MySQL requires SSL
+    }
+elif database_url.startswith("mysql+mysqlconnector://"):
+    # MySQL Connector/Python
+    connect_args = {
+        "charset": "utf8mb4",
+        "connection_timeout": 8,
+        "ssl_disabled": False
+    }
+elif database_url.startswith("mysql+mysqldb://") or database_url.startswith("mysql://"):
+    # MySQLdb/mysqlclient
+    connect_args = {
+        "charset": "utf8mb4", 
+        "connect_timeout": 8,
+        "ssl": {"ssl_mode": "REQUIRED"}
+    }
 
-# Add SSL configuration to connect_args
+# Add SSL certificate if available (but don't fail without it)
 if settings.MYSQL_SSL_CA:
-    # Convert relative path to absolute path for SSL certificate
     if not os.path.isabs(settings.MYSQL_SSL_CA):
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
         ssl_ca_path = os.path.join(project_root, settings.MYSQL_SSL_CA)
     else:
         ssl_ca_path = settings.MYSQL_SSL_CA
     
-    # Check if certificate file exists
     if os.path.exists(ssl_ca_path):
-        connect_args.update({
-            "ssl_ca": ssl_ca_path,
-            "ssl_disabled": False,
-        })
-    else:
-        # Force SSL even without certificate
-        connect_args.update({
-            "ssl_disabled": False,
-        })
-else:
-    # Force SSL for Azure MySQL
-    connect_args.update({
-        "ssl_disabled": False,
-    })
+        if "ssl" in connect_args:
+            connect_args["ssl"]["ca"] = ssl_ca_path
+        else:
+            connect_args["ssl_ca"] = ssl_ca_path
 
 engine = create_engine(
     database_url,
-    pool_pre_ping=True,
-    pool_recycle=300,
-    connect_args=connect_args
+    pool_pre_ping=True,      # Test connections before use
+    pool_recycle=280,        # Recycle connections before Azure timeout (5min)
+    pool_size=5,             # Base connection pool size
+    max_overflow=5,          # Additional connections under load
+    connect_args=connect_args,
+    future=True              # Use SQLAlchemy 2.0 style
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

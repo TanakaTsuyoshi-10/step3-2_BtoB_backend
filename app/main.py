@@ -12,16 +12,24 @@ from app.services.user import user_service
 @asynccontextmanager
 async def lifespan(app):
     print("アプリケーション起動中...")
+    
+    # Log database connection info (host only, no credentials)
+    database_url = settings.get_database_url()
+    if "@" in database_url and ":" in database_url:
+        # Extract host from URL (format: mysql+pymysql://user:pass@host:port/db)
+        host_part = database_url.split("@")[1].split("/")[0].split(":")[0]
+        print(f"データベースホスト: {host_part}")
+    
     try:
         # Test database connection first
         try:
             with SessionLocal() as db:
                 db.execute(text("SELECT 1"))
-            print("データベース接続確認成功")
+            print("✅ データベース接続確認成功")
         except Exception as db_error:
-            print(f"データベース接続エラー: {db_error}")
+            print(f"❌ データベース接続エラー: {db_error}")
             # Don't fail the app startup, just log the error
-            print("警告: データベース接続に失敗しましたが、アプリケーションを起動します")
+            print("⚠️  警告: データベース接続に失敗しましたが、アプリケーションを起動します")
         
         # Create first superuser if configured and database is available
         if settings.FIRST_SUPERUSER_EMAIL and settings.FIRST_SUPERUSER_PASSWORD:
@@ -71,8 +79,8 @@ if cors_origins:
         CORSMiddleware,
         allow_origins=[str(origin) for origin in cors_origins],
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
+        allow_headers=["*"],
     )
 
 app.include_router(api_router, prefix="/api/v1")
@@ -85,21 +93,37 @@ def read_root():
 
 @app.get("/health")
 def health_check():
-    """ヘルスチェックエンドポイント - アプリケーションとデータベースの状態を確認"""
+    """Enhanced health check with detailed database status"""
+    from datetime import datetime
+    
     health_status = {
         "status": "healthy",
         "app": "エネルギーマネージャー API",
         "version": settings.PROJECT_VERSION,
-        "timestamp": "2025-01-18T12:00:00Z"
+        "timestamp": datetime.utcnow().isoformat() + "Z"
     }
     
-    # データベース接続チェック
+    # Database connection test with more details
     try:
         with SessionLocal() as db:
-            db.execute(text("SELECT 1"))
-        health_status["database"] = "接続正常"
+            result = db.execute(text("SELECT 1 as test_value"))
+            row = result.fetchone()
+            if row and row[0] == 1:
+                health_status["database"] = {
+                    "status": "ok",
+                    "message": "接続正常"
+                }
+            else:
+                health_status["database"] = {
+                    "status": "error", 
+                    "message": "クエリ結果が不正"
+                }
+                health_status["status"] = "degraded"
     except Exception as e:
-        health_status["database"] = f"接続エラー: {str(e)}"
-        health_status["status"] = "degraded"  # Still return 200 but indicate issues
+        health_status["database"] = {
+            "status": "error",
+            "message": f"接続エラー: {str(e)[:400]}"
+        }
+        health_status["status"] = "degraded"
     
     return health_status
