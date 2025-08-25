@@ -1,4 +1,4 @@
-name: ci: deploy fastapi to Azure App Service (publish profile)
+name: Deploy to Azure Web App (Publish Profile)
 
 on:
   push:
@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: deploy-webapp
+  cancel-in-progress: true
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
@@ -16,7 +20,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -25,28 +29,37 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Install deps
+      - name: Install dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           python -V
           pip freeze | sed -n '1,120p'
 
-      # （任意）テストがあれば実行
-      # - name: Run tests
-      #   run: pytest -q
-
-      # 発行プロファイルでデプロイ（azure/loginは使わない）
-      - name: Deploy to Azure Web App
+      - name: Deploy to Azure Web App (publish profile)
         uses: azure/webapps-deploy@v3
         with:
-          app-name: app-002-gen10-step3-2-py-oshima2
+          app-name: "app-002-gen10-step3-2-py-oshima2"
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
+          package: .
+          # venv パス固定を避けるため python -m で実行
+          startup-command: |
+            python -m gunicorn -k uvicorn.workers.UvicornWorker -w 1 -t 180 app.main:app --bind=0.0.0.0:${PORT:-8000}
 
-# メモ:
-# - 発行プロファイル方式では azure/login は不要です
-# - アプリの起動コマンドは Azure ポータルの「構成 > 全般設定 > スタートアップ コマンド」で管理します
+      - name: Health check
+        shell: bash
+        run: |
+          set -e
+          URL="https://app-002-gen10-step3-2-py-oshima2.azurewebsites.net/health"
+          for i in {1..30}; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || true)
+            echo "Attempt $i -> $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 10
+          done
+          echo "Health check failed"; exit 1
