@@ -191,9 +191,45 @@ SECRET_KEY=your-secret-key
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=30
 
-# CORS (optional)
-ALLOWED_ORIGINS=["http://localhost:3000"]
+# CORS - Use JSON string format for Azure compatibility
+ALLOWED_ORIGINS=["http://localhost:3000","https://your-frontend.example.com"]
 ```
+
+## Azure Deployment Fixes
+
+### Recent Stability Improvements
+
+This backend includes several fixes for Azure App Service deployment issues:
+
+#### 1. Oryx Virtual Environment Path Fix
+- **Problem**: Azure Oryx creates venv at `/tmp/<random>/antenv` instead of expected `/home/site/wwwroot/antenv`
+- **Solution**: Updated startup command to use `python -m gunicorn` instead of hardcoded paths
+
+#### 2. Dependencies and Module Import Fix
+- **Problem**: Missing `uvicorn` module causing ModuleNotFoundError
+- **Solution**: Updated `requirements.txt` with flexible version constraints:
+  - `fastapi~=0.115`
+  - `uvicorn[standard]~=0.30` 
+  - `gunicorn~=21.2`
+
+#### 3. ALLOWED_ORIGINS Type Compatibility
+- **Problem**: Environment variable type mismatch between string and list
+- **Solution**: Enhanced parser in `app/core/config.py` to handle both JSON strings and comma-separated values
+
+#### 4. Production Startup Command
+Azure App Service now uses this optimized startup command:
+```bash
+python -m gunicorn -k uvicorn.workers.UvicornWorker -w 1 --timeout 180 --graceful-timeout 30 --keep-alive 5 app.main:app --bind=0.0.0.0:${PORT:-8000}
+```
+
+#### 5. GitHub Actions Automation
+- Automated deployment through GitHub Actions
+- Azure CLI configuration for app settings
+- Health check verification after deployment
+
+### Local Development vs Production
+- **Local**: `uvicorn app.main:app --reload`
+- **Production**: `python -m gunicorn` with Uvicorn workers
 
 ## Deployment
 

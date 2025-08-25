@@ -38,6 +38,30 @@ jobs:
           echo "Package preview:"
           unzip -l deployment.zip | sed -n '1,200p'
 
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Configure App Service (startup & settings)
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            # Set startup command using python -m to avoid Oryx venv path issues
+            az webapp config set \
+              --resource-group "rg-001-gen10" \
+              --name "app-002-gen10-step3-2-py-oshima2" \
+              --startup-file 'python -m gunicorn -k uvicorn.workers.UvicornWorker -w 1 --timeout 180 --graceful-timeout 30 --keep-alive 5 app.main:app --bind=0.0.0.0:${PORT:-8000}'
+            
+            # Set required app settings
+            az webapp config appsettings set \
+              --resource-group "rg-001-gen10" \
+              --name "app-002-gen10-step3-2-py-oshima2" \
+              --settings \
+                ALGORITHM="HS256" \
+                ACCESS_TOKEN_EXPIRE_MINUTES="30" \
+                ALLOWED_ORIGINS='["https://app-002-gen10-step3-2-node-oshima2.azurewebsites.net","http://localhost:3000"]'
+
       - name: Deploy to Azure WebApp (Publish Profile)
         uses: azure/webapps-deploy@v2
         with:
