@@ -1,4 +1,4 @@
-name: Deploy FastAPI to Azure App Service
+name: ci: deploy fastapi to Azure App Service (publish profile)
 
 on:
   push:
@@ -6,14 +6,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write
   contents: read
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    env:
-      APP_NAME: app-002-gen10-step3-2-py-oshima2
 
     steps:
       - name: Checkout
@@ -24,56 +21,32 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          python -m venv antenv
-          source antenv/bin/activate
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
           python -V
           pip freeze | sed -n '1,120p'
 
-      # ---- Azure Login (primary: AZURE_CREDENTIALS JSON) ----
-      - name: Azure Login with AZURE_CREDENTIALS
-        id: azlogin-json
-        uses: azure/login@v2
-        if: secrets.AZURE_CREDENTIALS != ''
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      # （任意）テストがあれば実行
+      # - name: Run tests
+      #   run: pytest -q
 
-      # ---- Azure Login (fallback: individual secrets) ----
-      - name: Azure Login with individual SP secrets
-        id: azlogin-sp
-        if: secrets.AZURE_CREDENTIALS == '' && secrets.AZURE_CLIENT_ID != ''
-        uses: azure/login@v2
-        with:
-          auth-type: SERVICE_PRINCIPAL
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-
-      - name: Verify Azure context
-        run: az account show
-
-      # 必要に応じて DB マイグレーション等をここへ
-
-      - name: Deploy to Azure WebApp
+      # 発行プロファイルでデプロイ（azure/loginは使わない）
+      - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
-          app-name: ${{ env.APP_NAME }}
-          package: .
-          # Portal 側でスタートアップコマンドを設定済みなら下行は削除
-          startup-command: |
-            python -m gunicorn -k uvicorn.workers.UvicornWorker -w 2 -t 180 app.main:app --bind=0.0.0.0:8000
+          app-name: app-002-gen10-step3-2-py-oshima2
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
 
-      - name: Post-deploy health check
-        run: |
-          set -eux
-          for i in $(seq 1 15); do
-            code=$(curl -s -o /dev/null -w "%{http_code}" "https://app-002-gen10-step3-2-py-oshima2.azurewebsites.net/health" || true)
-            echo "Attempt $i -> HTTP $code"
-            if [ "$code" = "200" ]; then exit 0; fi
-            sleep 10
-          done
-          echo "Health check failed"; exit 1
+# メモ:
+# - 発行プロファイル方式では azure/login は不要です
+# - アプリの起動コマンドは Azure ポータルの「構成 > 全般設定 > スタートアップ コマンド」で管理します

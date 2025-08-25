@@ -253,9 +253,23 @@ python -m gunicorn -k uvicorn.workers.UvicornWorker -w 1 --timeout 180 --gracefu
    ```
 
 3. **Deploy**
-   ```bash
-   git push azure main
-   ```
+   - **Automatic**: Push to main branch triggers GitHub Actions deployment
+   - **Manual**: Use "Run workflow" button in GitHub Actions tab
+
+### Current Deployment Configuration
+
+- **Method**: Publish Profile (AZUREAPPSERVICE_PUBLISHPROFILE secret)
+- **Trigger**: Push to main branch or manual workflow dispatch
+- **App Service**: app-002-gen10-step3-2-py-oshima2
+- **Startup Command**: `python -m gunicorn -k uvicorn.workers.UvicornWorker -w 1 -t 180 app.main:app --bind=0.0.0.0:${PORT:-8000}`
+- **Health Check**: https://app-002-gen10-step3-2-py-oshima2.azurewebsites.net/health
+
+### Deployment Process
+
+1. **Code Changes**: Push changes to main branch
+2. **GitHub Actions**: Automatically builds and deploys
+3. **Health Check**: Verify `/health` endpoint returns 200
+4. **Monitoring**: Check Azure Portal logs if needed
 
 ## Contributing
 
