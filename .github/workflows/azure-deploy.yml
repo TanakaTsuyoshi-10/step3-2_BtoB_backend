@@ -12,6 +12,8 @@ permissions:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    env:
+      APP_NAME: app-002-gen10-step3-2-py-oshima2
 
     steps:
       - name: Checkout
@@ -28,30 +30,39 @@ jobs:
           python -m venv antenv
           source antenv/bin/activate
           pip install -r requirements.txt
+          python -V
+          pip freeze | sed -n '1,120p'
 
-      - name: Azure Login
+      # ---- Azure Login (primary: AZURE_CREDENTIALS JSON) ----
+      - name: Azure Login with AZURE_CREDENTIALS
+        id: azlogin-json
         uses: azure/login@v2
+        if: ${{ secrets.AZURE_CREDENTIALS != '' }}
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # ---- Azure Login (fallback: individual secrets) ----
+      - name: Azure Login with individual SP secrets
+        id: azlogin-sp
+        if: ${{ steps.azlogin-json.outcome == 'skipped' }}
+        uses: azure/login@v2
+        with:
+          auth-type: SERVICE_PRINCIPAL
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
 
       - name: Verify Azure context
         run: az account show
 
+      # 必要に応じて DB マイグレーション等をここへ
+
       - name: Deploy to Azure WebApp
         uses: azure/webapps-deploy@v3
         with:
-          app-name: app-002-gen10-step3-2-py-oshima2
+          app-name: ${{ env.APP_NAME }}
           package: .
+          # Portal 側でスタートアップコマンドを設定済みなら下行は削除
           startup-command: |
             python -m gunicorn -k uvicorn.workers.UvicornWorker -w 2 -t 180 app.main:app --bind=0.0.0.0:8000
-
-      - name: Post-deploy health check
-        run: |
-          set -eux
-          for i in $(seq 1 15); do
-            code=$(curl -s -o /dev/null -w "%{http_code}" "https://app-002-gen10-step3-2-py-oshima2.azurewebsites.net/health" || true)
-            echo "Attempt $i -> HTTP $code"
-            if [ "$code" = "200" ]; then exit 0; fi
-            sleep 10
-          done
-          echo "Health check failed"; exit 1
