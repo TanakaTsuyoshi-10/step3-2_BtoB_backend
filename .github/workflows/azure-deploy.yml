@@ -1,11 +1,13 @@
-name: Deploy Backend to Azure App Service (prebuilt venv)
+name: Deploy FastAPI to Azure App Service
 
 on:
   push:
     branches: [ "main" ]
-    paths-ignore:
-      - "**.md"
   workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   build-and-deploy:
@@ -15,59 +17,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Create antenv and install deps
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m venv antenv
-          . antenv/bin/activate
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          python -V
-          pip freeze | sed -n '1,120p'
+          source antenv/bin/activate
+          pip install -r requirements.txt
 
-      - name: Prepare deployment package (include antenv)
-        run: |
-          rm -f deployment.zip
-          zip -r deployment.zip . \
-            -x ".git/**" ".github/**" "__pycache__/**" "*.pyc" "*.log" \
-               "node_modules/**" ".pytest_cache/**"
-          echo "Package preview:"
-          unzip -l deployment.zip | sed -n '1,200p'
-
-      - name: Login to Azure
+      - name: Azure Login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Configure App Service (startup & settings)
-        uses: azure/cli@v2
-        with:
-          inlineScript: |
-            # Set startup command using python -m to avoid Oryx venv path issues
-            az webapp config set \
-              --resource-group "rg-001-gen10" \
-              --name "app-002-gen10-step3-2-py-oshima2" \
-              --startup-file 'python -m gunicorn -k uvicorn.workers.UvicornWorker -w 1 --timeout 180 --graceful-timeout 30 --keep-alive 5 app.main:app --bind=0.0.0.0:${PORT:-8000}'
-            
-            # Set required app settings
-            az webapp config appsettings set \
-              --resource-group "rg-001-gen10" \
-              --name "app-002-gen10-step3-2-py-oshima2" \
-              --settings \
-                ALGORITHM="HS256" \
-                ACCESS_TOKEN_EXPIRE_MINUTES="30" \
-                ALLOWED_ORIGINS='["https://app-002-gen10-step3-2-node-oshima2.azurewebsites.net","http://localhost:3000"]'
+      - name: Verify Azure context
+        run: az account show
 
-      - name: Deploy to Azure WebApp (Publish Profile)
-        uses: azure/webapps-deploy@v2
+      - name: Deploy to Azure WebApp
+        uses: azure/webapps-deploy@v3
         with:
-          app-name: "app-002-gen10-step3-2-py-oshima2"
-          package: "deployment.zip"
-          publish-profile: ${{ secrets.AZUREAPPSVC_PUBLISH_PROFILE_PY }}
+          app-name: app-002-gen10-step3-2-py-oshima2
+          package: .
+          startup-command: |
+            python -m gunicorn -k uvicorn.workers.UvicornWorker -w 2 -t 180 app.main:app --bind=0.0.0.0:8000
 
       - name: Post-deploy health check
         run: |
