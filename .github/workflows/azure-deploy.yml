@@ -47,9 +47,6 @@ jobs:
           app-name: "app-002-gen10-step3-2-py-oshima2"
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
           package: .
-          # venv パス固定を避けるため python -m で実行
-          startup-command: |
-            python -m gunicorn -k uvicorn.workers.UvicornWorker -w 1 -t 180 app.main:app --bind=0.0.0.0:${PORT:-8000}
 
       - name: Health check
         shell: bash
